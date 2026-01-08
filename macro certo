@@ -1,0 +1,67 @@
+Option Explicit
+
+Private Const ABA As String = "input ntnb"
+Private Const BACKUP_ABA As String = "_backup_ntnb"
+
+' 17 linhas cada
+Private Const POS1 As String = "B48:AK65"
+Private Const POS2 As String = "B27:AK44"
+Private Const POS3 As String = "B5:AK22"
+
+Sub Shift_InputNTNB_ComBackup()
+
+    Dim ws As Worksheet, bkp As Worksheet
+    Dim rng1 As Range, rng2 As Range, rng3 As Range
+
+    Set ws = ThisWorkbook.Worksheets(ABA)
+    Set bkp = ThisWorkbook.Worksheets(BACKUP_ABA)
+
+    Set rng1 = ws.Range(POS1)
+    Set rng2 = ws.Range(POS2)
+    Set rng3 = ws.Range(POS3)
+
+    Application.ScreenUpdating = False
+
+    ' ===== BACKUP (salva estado anterior) =====
+    bkp.Range("A1").Value = "BACKUP_OK" ' marcação simples
+    bkp.Range("A2").Value = Now
+
+    bkp.Range(POS1).Value = rng1.Value
+    bkp.Range(POS2).Value = rng2.Value
+    bkp.Range(POS3).Value = rng3.Value
+
+    ' ===== SHIFT =====
+    rng3.Value = rng2.Value
+    rng2.Value = rng1.Value
+    rng1.ClearContents
+
+    Application.ScreenUpdating = True
+
+    MsgBox "Atualização concluída. Se precisar, use a macro DESFAZER.", vbInformation
+
+End Sub
+
+
+Sub Desfazer_Shift_InputNTNB()
+
+    Dim ws As Worksheet, bkp As Worksheet
+
+    Set ws = ThisWorkbook.Worksheets(ABA)
+    Set bkp = ThisWorkbook.Worksheets(BACKUP_ABA)
+
+    If bkp.Range("A1").Value <> "BACKUP_OK" Then
+        MsgBox "Não encontrei backup para desfazer. Rode a atualização pelo menos 1 vez.", vbExclamation
+        Exit Sub
+    End If
+
+    Application.ScreenUpdating = False
+
+    ws.Range(POS1).Value = bkp.Range(POS1).Value
+    ws.Range(POS2).Value = bkp.Range(POS2).Value
+    ws.Range(POS3).Value = bkp.Range(POS3).Value
+
+    Application.ScreenUpdating = True
+
+    MsgBox "Última ação desfeita com sucesso.", vbInformation
+
+End Sub
