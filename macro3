@@ -1,0 +1,27 @@
+Option Explicit
+
+Sub Desfazer_Shift_InputNTNB()
+
+    Const ABA As String = "input ntnb"
+    Const BACKUP_ABA As String = "_backup_ntnb"
+
+    Const POS1 As String = "B48:AK65"
+    Const POS2 As String = "B27:AK44"
+    Const POS3 As String = "B5:AK22"
+
+    Dim ws As Worksheet, bkp As Worksheet
+
+    Set ws = ThisWorkbook.Worksheets(ABA)
+    Set bkp = ThisWorkbook.Worksheets(BACKUP_ABA)
+
+    Application.ScreenUpdating = False
+
+    ws.Range(POS1).Value = bkp.Range(POS1).Value
+    ws.Range(POS2).Value = bkp.Range(POS2).Value
+    ws.Range(POS3).Value = bkp.Range(POS3).Value
+
+    Application.ScreenUpdating = True
+
+    MsgBox "Última ação desfeita com sucesso.", vbInformation
+
+End Sub
