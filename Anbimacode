@@ -1,0 +1,224 @@
+import os
+import requests
+import pandas as pd
+from datetime import date, timedelta
+from io import BytesIO
+from openpyxl import load_workbook
+
+# ================= CONFIGURAÇÕES =================
+BASE_URL = "https://www.anbima.com.br/informacoes/merc-sec-debentures/arqs"
+EXCEL_DESTINO = "MercadoSecundario_ANBIMA.xlsx"
+
+ABA_DI_FONTE = "DI_PERCENTUAL"
+ABA_IPCA_FONTE = "IPCA_SPREAD"
+
+HEADERS = {
+    "User-Agent": "Mozilla/5.0",
+    "Referer": "https://www.anbima.com.br/",
+}
+
+MESES_EN = {
+    1: "jan", 2: "feb", 3: "mar", 4: "apr",
+    5: "may", 6: "jun", 7: "jul", 8: "aug",
+    9: "sep", 10: "oct", 11: "nov", 12: "dec",
+}
+
+MAX_BACK = 4
+# =================================================
+
+
+def montar_url(dt: date) -> str:
+    yy = dt.strftime("%y")
+    dd = dt.strftime("%d")
+    mon = MESES_EN[dt.month]
+    return f"{BASE_URL}/d{yy}{mon}{dd}.xls"
+
+
+def baixar_excel(dt: date) -> BytesIO | None:
+    url = montar_url(dt)
+    resp = requests.get(url, headers=HEADERS, timeout=30)
+    if resp.status_code != 200 or not resp.content or len(resp.content) < 200:
+        return None
+    return BytesIO(resp.content)
+
+
+def achar_mais_proximo(data_inicio: date) -> tuple[date, BytesIO] | None:
+    print(f"\n📅 Data alvo: {data_inicio.strftime('%d/%m/%Y')}")
+    for i in range(MAX_BACK + 1):
+        dt = data_inicio - timedelta(days=i)
+        print(f"⬇️ Tentando baixar: {montar_url(dt)}")
+
+        b = baixar_excel(dt)
+        if b is not None:
+            print(f"✅ Arquivo encontrado para {dt.strftime('%d/%m/%Y')}")
+            return dt, b
+
+        print("❌ Não encontrado")
+
+    print("⚠️ Nenhum arquivo encontrado dentro do limite\n")
+    return None
+
+
+def remover_abas_snapshot(path: str):
+    """
+    Remove abas antigas de snapshot (qualquer aba que comece com 'Hoje ' ou 'Hist ')
+    para não acumular datas antigas.
+    """
+    if not os.path.exists(path):
+        print("ℹ️ Arquivo destino ainda não existe. Vou criar do zero.")
+        return
+
+    wb = load_workbook(path)
+    to_remove = [s for s in wb.sheetnames if s.startswith("Hoje ") or s.startswith("Hist ")]
+
+    if not to_remove:
+        print("ℹ️ Nenhuma aba antiga de snapshot para remover.")
+        return
+
+    print(f"🧹 Removendo {len(to_remove)} abas antigas: {to_remove}")
+    for s in to_remove:
+        wb.remove(wb[s])
+
+    # garantir pelo menos uma aba (openpyxl exige)
+    if len(wb.sheetnames) == 0:
+        wb.create_sheet("Base")
+
+    wb.active = 0
+    wb.save(path)
+
+
+def _achar_linha_cabecalho(df_raw: pd.DataFrame) -> int | None:
+    """
+    Procura a linha onde começa a tabela (contém 'Código' e 'Nome').
+    """
+    alvo1 = "código"
+    alvo2 = "nome"
+
+    for i in range(min(len(df_raw), 80)):  # procura nas primeiras 80 linhas
+        linha = df_raw.iloc[i].astype(str).str.strip().str.lower()
+        if (linha == alvo1).any() and (linha == alvo2).any():
+            return i
+    return None
+
+
+def _cortar_ate_fim_tabela(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Mantém linhas até acabar a tabela: para quando a 1ª coluna ficar vazia.
+    Remove observações/rodapé.
+    """
+    if df.empty:
+        return df
+
+    primeira = df.columns[0]
+    serie = df[primeira]
+    valido = serie.notna() & (serie.astype(str).str.strip() != "")
+
+    if not valido.any():
+        return df.reset_index(drop=True)
+
+    ultimo_idx = valido[valido].index.max()
+    return df.loc[:ultimo_idx].reset_index(drop=True)
+
+
+def ler_aba_limpa(excel_bytes: BytesIO, aba: str) -> pd.DataFrame:
+    print(f"📊 Lendo aba: {aba}")
+
+    df_raw = pd.read_excel(excel_bytes, sheet_name=aba, header=None)
+    idx_header = _achar_linha_cabecalho(df_raw)
+
+    if idx_header is None:
+        print("⚠️ Cabeçalho não detectado automaticamente, usando fallback (header=0)")
+        df = pd.read_excel(excel_bytes, sheet_name=aba, header=0).dropna(how="all")
+        df = _cortar_ate_fim_tabela(df)
+        print(f"✅ Aba {aba} pronta (fallback) com {len(df)} linhas e {len(df.columns)} colunas")
+        return df
+
+    print(f"🧹 Cabeçalho encontrado na linha {idx_header}. Limpando títulos/observações...")
+
+    header = df_raw.iloc[idx_header].astype(str).str.strip().tolist()
+    df = df_raw.iloc[idx_header + 1 :].copy()
+    df.columns = header
+    df = df.dropna(how="all")
+
+    # remove colunas vazias tipo "Unnamed: ..."
+    cols_validas = []
+    for c in df.columns:
+        nome = str(c).strip()
+        if nome and not nome.lower().startswith("unnamed"):
+            cols_validas.append(c)
+    df = df[cols_validas]
+
+    df = _cortar_ate_fim_tabela(df)
+
+    print(f"✅ Aba {aba} pronta com {len(df)} linhas e {len(df.columns)} colunas")
+    return df
+
+
+def main():
+    print("\n🚀 Iniciando atualização ANBIMA (Mercado Sec. Debêntures)\n")
+
+    hoje = date.today()
+
+    # ===== HOJE =====
+    print("=== 1) Snapshot HOJE ===")
+    prox_hoje = achar_mais_proximo(hoje)
+    df_hoje_di = df_hoje_ipca = None
+    nome_data_hoje = None
+
+    if prox_hoje:
+        dt, bytes_ok = prox_hoje
+        nome_data_hoje = dt.strftime("%d-%m-%Y")
+        print(f"📌 HOJE usando data efetiva: {dt.strftime('%d/%m/%Y')}")
+
+        df_hoje_di = ler_aba_limpa(bytes_ok, ABA_DI_FONTE)
+        bytes_ok.seek(0)
+        df_hoje_ipca = ler_aba_limpa(bytes_ok, ABA_IPCA_FONTE)
+
+    # ===== HIST (HOJE - 7) =====
+    print("\n=== 2) Snapshot HIST (hoje - 7) ===")
+    prox_hist = achar_mais_proximo(hoje - timedelta(days=7))
+    df_hist_di = df_hist_ipca = None
+    nome_data_hist = None
+
+    if prox_hist:
+        dt, bytes_ok = prox_hist
+        nome_data_hist = dt.strftime("%d-%m-%Y")
+        print(f"📌 HIST usando data efetiva: {dt.strftime('%d/%m/%Y')}")
+
+        df_hist_di = ler_aba_limpa(bytes_ok, ABA_DI_FONTE)
+        bytes_ok.seek(0)
+        df_hist_ipca = ler_aba_limpa(bytes_ok, ABA_IPCA_FONTE)
+
+    if not any([df_hoje_di is not None, df_hist_di is not None]):
+        print("\n⚠️ Nada para salvar. Encerrando.\n")
+        return
+
+    # ===== REMOVER SNAPSHOTS ANTIGOS =====
+    print("\n=== 3) Limpeza de abas antigas ===")
+    remover_abas_snapshot(EXCEL_DESTINO)
+
+    # ===== SALVAR (somente 4 abas) =====
+    print("\n=== 4) Salvando no Excel destino ===")
+    mode = "a" if os.path.exists(EXCEL_DESTINO) else "w"
+    writer_kwargs = {"if_sheet_exists": "replace"} if mode == "a" else {}
+
+    with pd.ExcelWriter(EXCEL_DESTINO, engine="openpyxl", mode=mode, **writer_kwargs) as writer:
+        if df_hoje_di is not None:
+            aba_hoje_di = f"Hoje DI_PERCENTUAL ({nome_data_hoje})"
+            aba_hoje_ipca = f"Hoje IPCA_SPREAD ({nome_data_hoje})"
+            df_hoje_di.to_excel(writer, sheet_name=aba_hoje_di, index=False)
+            df_hoje_ipca.to_excel(writer, sheet_name=aba_hoje_ipca, index=False)
+            print(f"✅ Gravou: {aba_hoje_di} | {aba_hoje_ipca}")
+
+        if df_hist_di is not None:
+            aba_hist_di = f"Hist DI_PERCENTUAL ({nome_data_hist})"
+            aba_hist_ipca = f"Hist IPCA_SPREAD ({nome_data_hist})"
+            df_hist_di.to_excel(writer, sheet_name=aba_hist_di, index=False)
+            df_hist_ipca.to_excel(writer, sheet_name=aba_hist_ipca, index=False)
+            print(f"✅ Gravou: {aba_hist_di} | {aba_hist_ipca}")
+
+    print(f"\n✅ Concluído com sucesso! Arquivo atualizado: {EXCEL_DESTINO}\n")
+
+
+if __name__ == "__main__":
+    main()
