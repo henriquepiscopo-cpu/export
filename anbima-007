@@ -1,0 +1,93 @@
+import os
+import requests
+import pandas as pd
+from datetime import date, timedelta
+from io import BytesIO
+from openpyxl import Workbook, load_workbook
+from openpyxl.worksheet.worksheet import Worksheet
+
+# ================= CONFIGURAÇÕES =================
+BASE_URL = "https://www.anbima.com.br/informacoes/merc-sec/arqs"
+
+# Ordem pedida: LTN, NTN-B, NTN-F
+ABAS_ORIGEM = ["LTN", "NTN-B", "NTN-F"]
+
+EXCEL_DESTINO = "NTNB_Output.xlsx"
+ABA_DESTINO = "ANBIMA_LADO_A_LADO"
+
+ESPACO_COLUNAS = 1
+MAX_DIAS_CORRIDOS_BUSCA = 40
+
+HEADERS = {
+    "User-Agent": "Mozilla/5.0",
+    "Referer": "https://www.anbima.com.br/",
+    "Accept": "*/*",
+    "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
+}
+
+MESES_PT = {
+    1: "jan", 2: "fev", 3: "mar", 4: "abr",
+    5: "mai", 6: "jun", 7: "jul", 8: "ago",
+    9: "set", 10: "out", 11: "nov", 12: "dez",
+}
+# ================================================
+
+
+def montar_url(dt: date) -> str:
+    return f"{BASE_URL}/m{dt.strftime('%y')}{MESES_PT[dt.month]}{dt.strftime('%d')}.xls"
+
+
+def baixar_xls_validando(dt: date) -> BytesIO | None:
+    url = montar_url(dt)
+    resp = requests.get(url, headers=HEADERS, timeout=30)
+
+    ole_sig = b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1"
+    if resp.status_code != 200 or not resp.content:
+        return None
+    if resp.content[:8] != ole_sig:
+        return None
+
+    return BytesIO(resp.content)
+
+
+def achar_mais_recente() -> tuple[date, BytesIO]:
+    dt = date.today()
+    for _ in range(MAX_DIAS_CORRIDOS_BUSCA):
+        b = baixar_xls_validando(dt)
+        if b is not None:
+            print(f"✅ Mais recente: {dt.strftime('%d/%m/%Y')}")
+            return dt, b
+        dt -= timedelta(days=1)
+
+    raise RuntimeError("Nenhum arquivo encontrado.")
+
+
+def cortar_fim_tabela(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Remove tudo que vem após o fim real da tabela
+    (observações, notas, legendas).
+    """
+    primeira_col = df.columns[0]
+    valido = df[primeira_col].notna() & (df[primeira_col].astype(str).str.strip() != "")
+
+    if not valido.any():
+        return df
+
+    ultimo_idx = valido[valido].index.max()
+    return df.loc[:ultimo_idx].reset_index(drop=True)
+
+
+def ler_aba_xls(xls_bytes: BytesIO, sheet_name: str) -> pd.DataFrame:
+    xls_bytes.seek(0)
+
+    try:
+        df = pd.read_excel(xls_bytes, sheet_name=sheet_name, engine="xlrd")
+    except Exception:
+        xls_bytes.seek(0)
+        df = pd.read_excel(xls_bytes, sheet_name=sheet_name)
+
+    df = df.dropna(how="all")
+    df = df.dropna(axis=1, how="all")
+    df = cortar_fim_tabela(df)
+
+    return df
