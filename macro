@@ -1,0 +1,29 @@
+Option Explicit
+
+Sub Shift_3_Posicoes_InputNTNB()
+
+    Const ABA As String = "input ntnb"
+
+    Const POS1 As String = "B48:AK64"
+    Const POS2 As String = "B27:AK43"
+    Const POS3 As String = "B5:AK21"
+
+    Dim ws As Worksheet
+    Dim rng1 As Range, rng2 As Range, rng3 As Range
+
+    Set ws = ThisWorkbook.Worksheets(ABA)
+    Set rng1 = ws.Range(POS1)
+    Set rng2 = ws.Range(POS2)
+    Set rng3 = ws.Range(POS3)
+
+    Application.ScreenUpdating = False
+
+    rng3.Value = rng2.Value
+    rng2.Value = rng1.Value
+    rng1.ClearContents
+
+    Application.ScreenUpdating = True
+
+    MsgBox "Shift concluído: posição 1→2, 2→3, e 3 descartada.", vbInformation
+
+End Sub
