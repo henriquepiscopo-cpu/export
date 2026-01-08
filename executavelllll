@@ -1,0 +1,184 @@
+import os
+import requests
+import pandas as pd
+from datetime import date, timedelta
+from io import BytesIO
+from openpyxl import Workbook, load_workbook
+from openpyxl.worksheet.worksheet import Worksheet
+
+# ================= CONFIGURAÇÕES =================
+BASE_URL = "https://www.anbima.com.br/informacoes/merc-sec/arqs"
+
+# Ordem pedida: LTN, NTN-B, NTN-F (esquerda -> direita)
+ABAS_ORIGEM = ["LTN", "NTN-B", "NTN-F"]
+
+EXCEL_DESTINO = "NTNB_Output.xlsx"
+ABA_DESTINO = "ANBIMA_LADO_A_LADO"
+
+ESPACO_COLUNAS = 1
+MAX_DIAS_CORRIDOS_BUSCA = 40
+
+# Headers no mesmo estilo do script que funciona no .exe
+HEADERS = {
+    "User-Agent": "Mozilla/5.0",
+    "Referer": "https://www.anbima.com.br/informacoes/merc-sec/",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
+    # isso ajuda MUITO contra reset/proxy quando a conexão fica reutilizando socket
+    "Connection": "close",
+}
+
+# meses em PT-BR (dezembro = "dez")
+MESES_PT = {
+    1: "jan", 2: "fev", 3: "mar", 4: "abr",
+    5: "mai", 6: "jun", 7: "jul", 8: "ago",
+    9: "set", 10: "out", 11: "nov", 12: "dez",
+}
+# ================================================
+
+
+def montar_url(dt: date) -> str:
+    return f"{BASE_URL}/m{dt.strftime('%y')}{MESES_PT[dt.month]}{dt.strftime('%d')}.xls"
+
+
+def baixar_excel(dt: date) -> BytesIO | None:
+    """
+    Baixa o arquivo e só aceita se for XLS antigo (OLE).
+    Mesmo padrão do seu script que funciona em exe: GET + allow_redirects + headers browser-like.
+    """
+    url = montar_url(dt)
+
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=30, allow_redirects=True)
+    except Exception as e:
+        print(f"   ↳ ❌ erro de conexão: {e}")
+        return None
+
+    ct = (resp.headers.get("Content-Type") or "").lower()
+    size = len(resp.content or b"")
+
+    ole_sig = b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1"
+    is_xls_ole = size >= 8 and resp.content[:8] == ole_sig
+
+    if resp.status_code != 200 or not resp.content:
+        print(f"   ↳ ❌ status={resp.status_code} size={size} ct={ct}")
+        return None
+
+    if not is_xls_ole:
+        preview = (resp.content or b"")[:160]
+        print(f"   ↳ ❌ não é XLS (status={resp.status_code} size={size} ct={ct}) preview={preview!r}")
+        return None
+
+    return BytesIO(resp.content)
+
+
+def achar_mais_recente() -> tuple[date, BytesIO]:
+    print("\n🚀 Procurando o arquivo mais recente (merc-sec/arqs)...")
+    dt = date.today()
+
+    for _ in range(MAX_DIAS_CORRIDOS_BUSCA):
+        url = montar_url(dt)
+        print(f"🔎 Tentando {dt.strftime('%d/%m/%Y')} | {url}")
+
+        b = baixar_excel(dt)
+        if b is not None:
+            print(f"✅ MAIS RECENTE = {dt.strftime('%d/%m/%Y')}")
+            return dt, b
+
+        dt -= timedelta(days=1)
+
+    raise RuntimeError("Nenhum arquivo encontrado na janela de busca.")
+
+
+def _cortar_ate_fim_tabela(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Remove observações/legendas do final:
+    corta até a última linha válida da 1ª coluna.
+    """
+    if df.empty:
+        return df
+
+    primeira = df.columns[0]
+    s = df[primeira]
+    valido = s.notna() & (s.astype(str).str.strip() != "")
+
+    if not valido.any():
+        return df.reset_index(drop=True)
+
+    ultimo_idx = valido[valido].index.max()
+    return df.loc[:ultimo_idx].reset_index(drop=True)
+
+
+def ler_aba_xls(xls_bytes: BytesIO, sheet_name: str) -> pd.DataFrame:
+    """
+    Lê a aba do XLS (NTN-B, NTN-F, LTN).
+    """
+    xls_bytes.seek(0)
+    try:
+        df = pd.read_excel(xls_bytes, sheet_name=sheet_name, engine="xlrd")
+    except Exception:
+        xls_bytes.seek(0)
+        df = pd.read_excel(xls_bytes, sheet_name=sheet_name)
+
+    df = df.dropna(how="all").dropna(axis=1, how="all")
+    df = _cortar_ate_fim_tabela(df)
+    return df
+
+
+def escrever_df(ws: Worksheet, df: pd.DataFrame, start_row: int, start_col: int):
+    r = start_row
+
+    # cabeçalho
+    for j, col in enumerate(df.columns):
+        ws.cell(row=r, column=start_col + j, value=str(col))
+    r += 1
+
+    # dados
+    for i in range(df.shape[0]):
+        for j in range(df.shape[1]):
+            val = df.iat[i, j]
+            ws.cell(row=r + i, column=start_col + j, value=None if pd.isna(val) else val)
+
+
+def main():
+    dt_ok, xls_bytes = achar_mais_recente()
+
+    print("\n📥 Lendo abas LTN / NTN-B / NTN-F...")
+    dfs = {}
+    for aba in ABAS_ORIGEM:
+        print(f"   - Lendo {aba}")
+        dfs[aba] = ler_aba_xls(xls_bytes, aba)
+
+    # abre/cria destino
+    wb = load_workbook(EXCEL_DESTINO) if os.path.exists(EXCEL_DESTINO) else Workbook()
+
+    # cria/limpa aba destino
+    if ABA_DESTINO in wb.sheetnames:
+        ws = wb[ABA_DESTINO]
+        ws.delete_rows(1, ws.max_row)
+    else:
+        ws = wb.create_sheet(ABA_DESTINO)
+
+    ws.cell(row=1, column=1, value=f"ANBIMA Merc-Sec – {dt_ok.strftime('%d/%m/%Y')}")
+
+    linha_inicio = 3
+    col_atual = 1
+
+    # escreve lado a lado
+    for aba in ABAS_ORIGEM:
+        ws.cell(row=linha_inicio - 1, column=col_atual, value=aba)  # legenda em cima (mantida)
+        escrever_df(ws, dfs[aba], linha_inicio, col_atual)
+        col_atual += dfs[aba].shape[1] + ESPACO_COLUNAS
+
+    # remove sheet padrão vazio
+    if "Sheet" in wb.sheetnames and len(wb.sheetnames) > 1:
+        sh = wb["Sheet"]
+        if sh.max_row == 1 and sh.max_column == 1 and sh["A1"].value is None:
+            wb.remove(sh)
+
+    wb.save(EXCEL_DESTINO)
+    print("💾 Arquivo salvo com tabelas limpas (sem legendas inferiores).")
+
+
+if __name__ == "__main__":
+    main()
