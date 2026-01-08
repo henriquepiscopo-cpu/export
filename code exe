@@ -1,0 +1,187 @@
+import os
+import requests
+import pandas as pd
+from datetime import date, timedelta
+from io import BytesIO
+from openpyxl import Workbook, load_workbook
+from openpyxl.worksheet.worksheet import Worksheet
+
+# ✅ (1) Certificados: importantíssimo para rodar como .exe (PyInstaller)
+import certifi
+os.environ["SSL_CERT_FILE"] = certifi.where()
+os.environ["REQUESTS_CA_BUNDLE"] = certifi.where()
+
+# ✅ (2) Retry/backoff para evitar ConnectionResetError (10054)
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
+
+# ================= CONFIGURAÇÕES =================
+BASE_URL = "https://www.anbima.com.br/informacoes/merc-sec/arqs"
+
+# Ordem pedida: LTN, NTN-B, NTN-F
+ABAS_ORIGEM = ["LTN", "NTN-B", "NTN-F"]
+
+EXCEL_DESTINO = "NTNB_Output.xlsx"
+ABA_DESTINO = "ANBIMA_LADO_A_LADO"
+
+ESPACO_COLUNAS = 1
+MAX_DIAS_CORRIDOS_BUSCA = 40
+
+HEADERS = {
+    "User-Agent": "Mozilla/5.0",
+    "Referer": "https://www.anbima.com.br/",
+    "Accept": "*/*",
+    "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
+}
+
+MESES_PT = {
+    1: "jan", 2: "fev", 3: "mar", 4: "abr",
+    5: "mai", 6: "jun", 7: "jul", 8: "ago",
+    9: "set", 10: "out", 11: "nov", 12: "dez",
+}
+# ================================================
+
+
+def make_session() -> requests.Session:
+    s = requests.Session()
+    retries = Retry(
+        total=6,
+        connect=6,
+        read=6,
+        backoff_factor=1.2,  # 1.2s, 2.4s, 4.8s...
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["GET", "POST"],
+        raise_on_status=False,
+    )
+    adapter = HTTPAdapter(max_retries=retries, pool_connections=10, pool_maxsize=10)
+    s.mount("https://", adapter)
+    s.mount("http://", adapter)
+    return s
+
+
+SESSION = make_session()
+
+
+def montar_url(dt: date) -> str:
+    return f"{BASE_URL}/m{dt.strftime('%y')}{MESES_PT[dt.month]}{dt.strftime('%d')}.xls"
+
+
+def baixar_xls_validando(dt: date) -> BytesIO | None:
+    url = montar_url(dt)
+    try:
+        resp = SESSION.get(url, headers=HEADERS, timeout=30, allow_redirects=True)
+    except requests.exceptions.RequestException as e:
+        # aqui pega ConnectionResetError/Proxy/SSL e outros
+        print(f"   ↳ ❌ erro de conexão em {dt.strftime('%d/%m/%Y')}: {e}")
+        return None
+
+    ole_sig = b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1"
+    if resp.status_code != 200 or not resp.content:
+        # log leve para debug
+        print(f"   ↳ ❌ status={resp.status_code} size={len(resp.content or b'')}")
+        return None
+
+    if resp.content[:8] != ole_sig:
+        # às vezes vem HTML de erro com status 200
+        ct = (resp.headers.get("Content-Type") or "").lower()
+        preview = (resp.content or b"")[:120]
+        print(f"   ↳ ❌ não é XLS (ct={ct}) preview={preview!r}")
+        return None
+
+    return BytesIO(resp.content)
+
+
+def achar_mais_recente() -> tuple[date, BytesIO]:
+    dt = date.today()
+    for _ in range(MAX_DIAS_CORRIDOS_BUSCA):
+        b = baixar_xls_validando(dt)
+        if b is not None:
+            print(f"✅ Mais recente: {dt.strftime('%d/%m/%Y')}")
+            return dt, b
+        dt -= timedelta(days=1)
+
+    raise RuntimeError("Nenhum arquivo encontrado.")
+
+
+def cortar_fim_tabela(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Remove tudo que vem após o fim real da tabela (observações/notas/legendas).
+    """
+    if df.empty:
+        return df
+
+    primeira_col = df.columns[0]
+    valido = df[primeira_col].notna() & (df[primeira_col].astype(str).str.strip() != "")
+
+    if not valido.any():
+        return df
+
+    ultimo_idx = valido[valido].index.max()
+    return df.loc[:ultimo_idx].reset_index(drop=True)
+
+
+def ler_aba_xls(xls_bytes: BytesIO, sheet_name: str) -> pd.DataFrame:
+    xls_bytes.seek(0)
+
+    try:
+        df = pd.read_excel(xls_bytes, sheet_name=sheet_name, engine="xlrd")
+    except Exception:
+        xls_bytes.seek(0)
+        df = pd.read_excel(xls_bytes, sheet_name=sheet_name)
+
+    df = df.dropna(how="all")
+    df = df.dropna(axis=1, how="all")
+    df = cortar_fim_tabela(df)
+
+    return df
+
+
+def escrever_df(ws: Worksheet, df: pd.DataFrame, start_row: int, start_col: int):
+    r = start_row
+
+    # cabeçalho
+    for j, col in enumerate(df.columns):
+        ws.cell(row=r, column=start_col + j, value=str(col))
+    r += 1
+
+    # dados
+    for i in range(df.shape[0]):
+        for j in range(df.shape[1]):
+            val = df.iat[i, j]
+            ws.cell(row=r + i, column=start_col + j, value=None if pd.isna(val) else val)
+
+
+def main():
+    dt_ok, xls_bytes = achar_mais_recente()
+    dfs = {aba: ler_aba_xls(xls_bytes, aba) for aba in ABAS_ORIGEM}
+
+    wb = load_workbook(EXCEL_DESTINO) if os.path.exists(EXCEL_DESTINO) else Workbook()
+
+    if ABA_DESTINO in wb.sheetnames:
+        ws = wb[ABA_DESTINO]
+        ws.delete_rows(1, ws.max_row)
+    else:
+        ws = wb.create_sheet(ABA_DESTINO)
+
+    ws.cell(row=1, column=1, value=f"ANBIMA Merc-Sec – {dt_ok.strftime('%d/%m/%Y')}")
+
+    linha_inicio = 3
+    col_atual = 1
+
+    for aba in ABAS_ORIGEM:
+        ws.cell(row=linha_inicio - 1, column=col_atual, value=aba)
+        escrever_df(ws, dfs[aba], linha_inicio, col_atual)
+        col_atual += dfs[aba].shape[1] + ESPACO_COLUNAS
+
+    if "Sheet" in wb.sheetnames and len(wb.sheetnames) > 1:
+        sh = wb["Sheet"]
+        if sh.max_row == 1 and sh.max_column == 1 and sh["A1"].value is None:
+            wb.remove(sh)
+
+    wb.save(EXCEL_DESTINO)
+    print("💾 Arquivo salvo com tabelas limpas (sem legendas inferiores).")
+
+
+if __name__ == "__main__":
+    main()
