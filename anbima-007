@@ -91,3 +91,52 @@ def ler_aba_xls(xls_bytes: BytesIO, sheet_name: str) -> pd.DataFrame:
     df = cortar_fim_tabela(df)
 
     return df
+
+
+def escrever_df(ws: Worksheet, df: pd.DataFrame, start_row: int, start_col: int):
+    r = start_row
+
+    # cabeçalho
+    for j, col in enumerate(df.columns):
+        ws.cell(row=r, column=start_col + j, value=str(col))
+    r += 1
+
+    # dados
+    for i in range(df.shape[0]):
+        for j in range(df.shape[1]):
+            val = df.iat[i, j]
+            ws.cell(row=r + i, column=start_col + j, value=None if pd.isna(val) else val)
+
+
+def main():
+    dt_ok, xls_bytes = achar_mais_recente()
+
+    dfs = {aba: ler_aba_xls(xls_bytes, aba) for aba in ABAS_ORIGEM}
+
+    wb = load_workbook(EXCEL_DESTINO) if os.path.exists(EXCEL_DESTINO) else Workbook()
+
+    if ABA_DESTINO in wb.sheetnames:
+        ws = wb[ABA_DESTINO]
+        ws.delete_rows(1, ws.max_row)
+    else:
+        ws = wb.create_sheet(ABA_DESTINO)
+
+    ws.cell(row=1, column=1, value=f"ANBIMA Merc-Sec – {dt_ok.strftime('%d/%m/%Y')}")
+
+    linha_inicio = 3
+    col_atual = 1
+
+    for aba in ABAS_ORIGEM:
+        ws.cell(row=linha_inicio - 1, column=col_atual, value=aba)
+        escrever_df(ws, dfs[aba], linha_inicio, col_atual)
+        col_atual += dfs[aba].shape[1] + ESPACO_COLUNAS
+
+    if "Sheet" in wb.sheetnames and len(wb.sheetnames) > 1:
+        wb.remove(wb["Sheet"])
+
+    wb.save(EXCEL_DESTINO)
+    print("💾 Arquivo salvo com tabelas limpas (sem legendas inferiores).")
+
+
+if __name__ == "__main__":
+    main()
