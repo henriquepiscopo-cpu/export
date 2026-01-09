@@ -1,0 +1,121 @@
+import os
+import certifi
+import requests
+import pandas as pd
+from io import StringIO
+from datetime import date
+from dateutil.relativedelta import relativedelta
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
+# ================= CONFIG =================
+DOWNLOAD_URL = "https://www.debentures.com.br/exploreosnd/consultaadados/emissoesdedebentures/caracteristicas_e.asp"
+OUT_XLSX = "Debentures_Caracteristicas_ultimo_mes.xlsx"
+
+HEADERS = {
+    "User-Agent": "Mozilla/5.0",
+    "Accept": "*/*",
+    "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
+    "Connection": "close",
+    "Referer": "https://www.debentures.com.br/",
+}
+# =========================================
+
+
+def build_session() -> requests.Session:
+    s = requests.Session()
+    s.trust_env = True  # proxy do ambiente, se existir
+
+    retry = Retry(
+        total=5,
+        backoff_factor=0.8,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["GET"],
+        raise_on_status=False,
+    )
+    s.mount("https://", HTTPAdapter(max_retries=retry))
+    return s
+
+
+def fmt_ptbr(d: date) -> str:
+    return d.strftime("%d/%m/%Y")
+
+
+def parse_tsv_xls_to_df(content: bytes) -> pd.DataFrame:
+    """
+    O 'xls' do site é na verdade texto delimitado por TAB.
+    Vamos achar a linha do header e ler como TSV.
+    """
+    text = content.decode("latin1", errors="ignore").splitlines()
+    header_i = next(i for i, line in enumerate(text) if line.startswith("Codigo do Ativo"))
+    tsv = "\n".join(text[header_i:])
+    return pd.read_csv(StringIO(tsv), sep="\t", engine="python")
+
+
+def main():
+    hoje = date.today()
+    mes_antes = hoje - relativedelta(months=1)
+
+    params = {
+        "tip_deb": "publicas",
+        "op_exc": "False",
+
+        # intervalo (último mês)
+        "cvm_ini": fmt_ptbr(mes_antes),
+        "cvm_fim": fmt_ptbr(hoje),
+
+        # demais filtros (vazios)
+        "mnome": "",
+        "ativo": "",
+        "IPO": "",
+        "icvm": "",
+        "EscrituraPadronizada": "",
+        "emis_ini": "",
+        "emis_fim": "",
+        "venc_ini": "",
+        "venc_fim": "",
+        "TPV": "",
+        "TNV": "",
+        "rent_ini": "",
+        "rent_fim": "",
+        "distrib_ini": "",
+        "distrib_fim": "",
+        "indice": "",
+        "tipo": "",
+        "crit_calc": "",
+        "dia_ref": "",
+        "mult_rend": "",
+        "limite": "",
+        "trat_limite": "",
+        "tx_spread": "",
+        "prazo": "",
+        "premio_novo": "",
+        "premio_prazo": "",
+        "premio_antigo": "",
+        "Par": "",
+        "amortizacao": "",
+        "mbanco": "",
+        "magente": "",
+        "instdep": "",
+        "coordenador": "",
+
+        # vem no href do botão download
+        "Submit.x": "17",
+        "Submit.y": "15",
+    }
+
+    print(f"📅 Intervalo CVM: {params['cvm_ini']} → {params['cvm_fim']}")
+
+    s = build_session()
+    r = s.get(DOWNLOAD_URL, params=params, headers=HEADERS, timeout=(10, 90), verify=certifi.where())
+    r.raise_for_status()
+
+    df = parse_tsv_xls_to_df(r.content)
+
+    # salva só XLSX
+    df.to_excel(OUT_XLSX, index=False)
+    print(f"✅ XLSX salvo: {os.path.abspath(OUT_XLSX)}")
+
+
+if __name__ == "__main__":
+    main()
