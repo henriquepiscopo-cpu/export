@@ -1,0 +1,211 @@
+import re
+import asyncio
+import requests
+import pandas as pd
+from io import BytesIO
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from openpyxl import Workbook
+from playwright.async_api import async_playwright
+
+URL_LANDING = "https://www3.bcb.gov.br/expectativas2/"
+URL_XLS = "https://www3.bcb.gov.br/expectativas2/rest/publico/downloadSeriesEstatisticasXls"
+
+WINDOW_DAYS = 30
+MAX_ATTEMPTS = 20
+TIMEOUT = 60
+
+OUT_FILE = Path("focus_ipca_selic_2026_2027.xlsx")
+
+COMMON = {
+    "periodo": "ANUAL",
+    "consultaIndicadoresDescontinuados": False,
+    "tipoEstatistica": "MEDIANA",
+    "baseCalculoEstatistica": "TRINTA_DIAS",
+    "__ocultarFiltro__": True,
+    "__mostraResultadoSeriesEstatisticas__": True,
+}
+
+SERIES = [
+    {
+        "sheet": "IPCA",
+        "title_hint": "IPCA",
+        "payload": {
+            **COMMON,
+            "grupoIndicador": "INDICE_PRECOS_GRUPO",
+            "codigosIndicadores": ["IPCA"],
+        },
+    },
+    {
+        "sheet": "SELIC",
+        "title_hint": "SELIC",
+        "payload": {
+            **COMMON,
+            "grupoIndicador": "TAXAS_GRUPO",
+            "codigosIndicadores": ["META_TAXA_SELIC"],
+        },
+    },
+]
+
+def iso_z(dt: datetime) -> str:
+    return dt.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+def looks_like_excel_bytes(b: bytes, content_type: str) -> bool:
+    if not b or len(b) < 1000:
+        return False
+    if b[:2] in (b"PK", b"\xD0\xCF"):
+        return True
+    ct = (content_type or "").lower()
+    if "ms-excel" in ct or "spreadsheet" in ct or "application/vnd" in ct:
+        return True
+    return len(b) > 10_000
+
+def parse_and_filter_from_bytes(xls_bytes: bytes, title_hint: str) -> tuple[str, pd.DataFrame]:
+    raw = pd.read_excel(BytesIO(xls_bytes), header=None).dropna(how="all")
+
+    # título: primeira célula com o hint / ou com padrão do Focus
+    title = None
+    for i in range(min(8, len(raw))):
+        v = raw.iloc[i, 0]
+        if isinstance(v, str) and (title_hint in v.upper() or " - " in v):
+            title = v.strip()
+            break
+    title = title or title_hint
+
+    # achar header (linha com Data + 2026 + 2027)
+    header_idx = None
+    for i in range(min(80, len(raw))):
+        row = raw.iloc[i].astype(str)
+        has_data = row.str.contains(r"\bData\b", regex=True).any()
+        has_26 = row.str.contains(r"\b2026\b", regex=True).any()
+        has_27 = row.str.contains(r"\b2027\b", regex=True).any()
+        if has_data and has_26 and has_27:
+            header_idx = i
+            break
+    if header_idx is None:
+        raw.head(50).to_excel(f"debug_preview_{title_hint}.xlsx", index=False, header=False)
+        raise RuntimeError(f"[{title_hint}] Não achei header Data/2026/2027 (salvei debug_preview_{title_hint}.xlsx).")
+
+    header = raw.iloc[header_idx].tolist()
+
+    def norm(h):
+        s = str(h).strip()
+        if re.search(r"\bData\b", s): return "Data"
+        if re.search(r"\b2026\b", s): return "2026"
+        if re.search(r"\b2027\b", s): return "2027"
+        m = re.search(r"\b(20\d{2})\b", s)
+        return m.group(1) if m else s
+
+    header = [norm(x) if x is not None else "" for x in header]
+
+    df = raw.iloc[header_idx + 1 :].copy()
+    df.columns = header
+
+    # FILTRO ABSOLUTO
+    if "Data" not in df.columns or "2026" not in df.columns or "2027" not in df.columns:
+        df.head(50).to_excel(f"debug_df_{title_hint}.xlsx", index=False)
+        raise RuntimeError(f"[{title_hint}] Não consegui mapear Data/2026/2027 (salvei debug_df_{title_hint}.xlsx).")
+
+    df = df[["Data", "2026", "2027"]].copy()
+    df["_dt"] = pd.to_datetime(df["Data"], dayfirst=True, errors="coerce")
+    df = df[df["_dt"].notna()].sort_values("_dt").drop(columns=["_dt"])
+
+    return title, df
+
+async def get_tokens_via_playwright(headless: bool = True):
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=headless)
+        context = await browser.new_context()
+        page = await context.new_page()
+        await page.goto(URL_LANDING, wait_until="domcontentloaded")
+
+        # tentar aceitar cookies (se aparecer)
+        for sel in [
+            "text=Aceitar", "text=Aceito", "text=Concordo",
+            "button:has-text('Aceitar')", "button:has-text('Concordo')",
+            "button:has-text('OK')"
+        ]:
+            try:
+                await page.click(sel, timeout=900)
+                break
+            except Exception:
+                pass
+
+        await page.wait_for_timeout(800)
+
+        cookies = await context.cookies()
+        cookie_dict = {c["name"]: c["value"] for c in cookies}
+        xsrf = cookie_dict.get("XSRF-TOKEN")
+        ua = await page.evaluate("() => navigator.userAgent")
+
+        await browser.close()
+
+        if not xsrf:
+            raise RuntimeError("Não encontrei XSRF-TOKEN nos cookies.")
+        return cookie_dict, xsrf, ua
+
+def download_xls_bytes(cookie_dict: dict, xsrf: str, ua: str, payload_base: dict) -> bytes:
+    s = requests.Session()
+    s.cookies.update(cookie_dict)
+
+    headers = {
+        "accept": "application/json, text/plain, */*",
+        "content-type": "application/json",
+        "origin": "https://www3.bcb.gov.br",
+        "referer": "https://www3.bcb.gov.br/expectativas2/",
+        "user-agent": ua,
+        "x-xsrf-token": xsrf,
+    }
+
+    end = datetime.now(timezone.utc)
+    code = payload_base.get("codigosIndicadores", ["?"])[0]
+
+    for i in range(MAX_ATTEMPTS):
+        payload = dict(payload_base)
+        payload["dataFim"] = iso_z(end)
+        payload["dataInicio"] = iso_z(end - timedelta(days=WINDOW_DAYS))
+
+        print(f"[{code}] Tentando dataFim={payload['dataFim']} (tentativa {i+1}/{MAX_ATTEMPTS})")
+        r = s.post(URL_XLS, headers=headers, json=payload, timeout=TIMEOUT)
+
+        ct = r.headers.get("Content-Type", "")
+        if r.status_code == 200 and looks_like_excel_bytes(r.content, ct):
+            return r.content
+
+        end -= timedelta(days=1)
+
+    raise RuntimeError(f"Não consegui baixar XLS (bytes) para {code}.")
+
+def write_sheet(wb: Workbook, sheet_name: str, title: str, df: pd.DataFrame):
+    # remove sheet default se existir e for vazio
+    if "Sheet" in wb.sheetnames and len(wb.sheetnames) == 1 and wb["Sheet"].max_row == 1:
+        ws = wb["Sheet"]
+        wb.remove(ws)
+
+    # cria aba (ou limpa se já existir)
+    if sheet_name in wb.sheetnames:
+        ws = wb[sheet_name]
+        wb.remove(ws)
+
+    ws = wb.create_sheet(sheet_name)
+    ws["A1"] = title
+    ws.append(["Data", "2026", "2027"])
+    for row in df.itertuples(index=False):
+        ws.append(list(row))
+
+async def main():
+    cookie_dict, xsrf, ua = await get_tokens_via_playwright(headless=True)
+
+    wb = Workbook()
+
+    for s in SERIES:
+        xls_bytes = download_xls_bytes(cookie_dict, xsrf, ua, s["payload"])
+        title, df = parse_and_filter_from_bytes(xls_bytes, title_hint=s["title_hint"])
+        write_sheet(wb, s["sheet"], title, df)
+        print(f"[OK] Aba pronta: {s['sheet']}")
+
+    wb.save(OUT_FILE)
+    print(f"[OK] Arquivo gerado: {OUT_FILE}")
+
+if __name__ == "__main__":
+    asyncio.run(main())
