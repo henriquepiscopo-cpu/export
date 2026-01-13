@@ -1,0 +1,250 @@
+import re
+import time
+from datetime import datetime, date, timedelta
+from typing import Dict, Optional
+
+import pandas as pd
+import requests
+from openpyxl import load_workbook
+
+
+# =========================
+# AJUSTE AQUI
+# =========================
+EXCEL_PATH = r"volume negociado.xlsx"   # caminho do seu arquivo
+SHEET_NAME = "Planilha 1"              # aba
+DATE_COL_EXCEL = "A"                   # coluna onde fica a Data no seu Excel (ex.: "A")
+
+# Mapeamento: coluna do site (como aparece na tabela HTML) -> coluna do Excel (letra)
+# Você vai ajustar quando rodar 1x e ver os headers reais do site.
+COLUMN_MAP: Dict[str, str] = {
+    "Data": "A",
+    # Exemplo (troque pelos nomes reais):
+    # "Volume Negociado (R$)": "F",
+    # "Quantidade": "G",
+}
+
+# Se você quiser forçar sempre “+1 dia” a partir do último registro:
+START_FROM_NEXT_DAY = True
+
+# URLS do debentures.com.br (form e resultado)
+URL_FORM = "https://www.debentures.com.br/exploreosnd/consultaadados/mercadosecundario/volumesnegociados_f.asp"
+URL_POST = "https://www.debentures.com.br/exploreosnd/consultaadados/mercadosecundario/volumesnegociados_r.asp"
+
+
+# =========================
+# HELPERS
+# =========================
+def br_to_float(x):
+    """Converte '1.234.567,89' -> 1234567.89; mantém NaN/None."""
+    if pd.isna(x):
+        return None
+    s = str(x).strip()
+    if s == "" or s.lower() in {"nan", "none", "-"}:
+        return None
+    # remove R$, espaços
+    s = re.sub(r"[R$\s]", "", s)
+    # tira separador de milhar e troca vírgula por ponto
+    s = s.replace(".", "").replace(",", ".")
+    try:
+        return float(s)
+    except:
+        return s  # se não for número, devolve texto
+
+def parse_excel_date(v) -> Optional[date]:
+    """Aceita date/datetime/string dd/mm/aaaa e devolve date."""
+    if v is None:
+        return None
+    if isinstance(v, datetime):
+        return v.date()
+    if isinstance(v, date):
+        return v
+    s = str(v).strip()
+    if not s:
+        return None
+    # tenta dd/mm/aaaa
+    for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y"):
+        try:
+            return datetime.strptime(s, fmt).date()
+        except:
+            pass
+    return None
+
+def find_last_date_in_excel(path: str, sheet: str, date_col: str) -> date:
+    wb = load_workbook(path)
+    ws = wb[sheet]
+    # acha última linha com valor nessa coluna
+    last_row = ws.max_row
+    while last_row > 1 and ws[f"{date_col}{last_row}"].value in (None, ""):
+        last_row -= 1
+    last_val = ws[f"{date_col}{last_row}"].value
+    d = parse_excel_date(last_val)
+    if d is None:
+        raise RuntimeError(f"Não consegui ler a última data em {sheet}!{date_col}{last_row}. Valor={last_val!r}")
+    return d
+
+def excel_next_append_row(path: str, sheet: str, date_col: str) -> int:
+    wb = load_workbook(path)
+    ws = wb[sheet]
+    r = ws.max_row
+    while r > 1 and ws[f"{date_col}{r}"].value in (None, ""):
+        r -= 1
+    return r + 1
+
+def format_br(d: date) -> str:
+    return d.strftime("%d/%m/%Y")
+
+def fetch_table(dt_ini: date, dt_fim: date) -> pd.DataFrame:
+    s = requests.Session()
+    headers_get = {
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
+    }
+    # 1) abre a página do form para pegar cookies de sessão
+    r0 = s.get(URL_FORM, headers=headers_get, timeout=30)
+    r0.raise_for_status()
+
+    headers_post = {
+        "User-Agent": headers_get["User-Agent"],
+        "Accept": headers_get["Accept"],
+        "Accept-Language": headers_get["Accept-Language"],
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Origin": "https://www.debentures.com.br",
+        "Referer": URL_FORM,
+    }
+
+    form = {
+        "op_exc": "False",
+        "dt_ini": format_br(dt_ini),
+        "dt_fim": format_br(dt_fim),
+        # esses campos variam, mas normalmente não são obrigatórios;
+        # mantive igual ao cURL:
+        "Submit32.x": "31",
+        "Submit32.y": "13",
+    }
+
+    r = s.post(URL_POST, headers=headers_post, data=form, timeout=60)
+    r.raise_for_status()
+
+    # extrai tabelas do HTML
+    tables = pd.read_html(r.text, thousands=".", decimal=",")
+    if not tables:
+        raise RuntimeError("Não encontrei tabela no HTML retornado.")
+    # escolhe a tabela que tem coluna Data (normalmente a primeira)
+    df = None
+    for t in tables:
+        cols = [str(c).strip() for c in t.columns]
+        if any("data" in str(c).lower() for c in cols):
+            df = t
+            break
+    if df is None:
+        df = tables[0]
+
+    # normaliza nome de coluna Data
+    # (se vier "Data " ou "DATA", etc.)
+    df.columns = [str(c).strip() for c in df.columns]
+
+    # tenta achar coluna de data
+    date_col = None
+    for c in df.columns:
+        if str(c).strip().lower() == "data":
+            date_col = c
+            break
+    if date_col is None:
+        # tenta qualquer coluna que contenha "data"
+        for c in df.columns:
+            if "data" in str(c).lower():
+                date_col = c
+                break
+
+    if date_col is None:
+        raise RuntimeError(f"Não achei coluna de data. Colunas: {list(df.columns)}")
+
+    # converte data
+    df[date_col] = pd.to_datetime(df[date_col], dayfirst=True, errors="coerce").dt.date
+    df = df[df[date_col].notna()].copy()
+    df = df.sort_values(date_col)
+
+    # renomeia coluna de data para "Data" pra casar no map
+    if date_col != "Data":
+        df = df.rename(columns={date_col: "Data"})
+
+    return df
+
+def append_to_excel(df: pd.DataFrame, path: str, sheet: str, date_col_excel: str, col_map: Dict[str, str]) -> int:
+    wb = load_workbook(path)
+    ws = wb[sheet]
+
+    start_row = excel_next_append_row(path, sheet, date_col_excel)
+
+    # valida se map tem "Data"
+    if "Data" not in col_map:
+        raise RuntimeError("COLUMN_MAP precisa ter a chave 'Data' apontando para a coluna da data no Excel.")
+
+    # escreve linha a linha
+    row = start_row
+    for _, r in df.iterrows():
+        for site_col, excel_col in col_map.items():
+            val = r.get(site_col, None)
+
+            # Se for data/datetime, salva só date
+            if isinstance(val, datetime):
+                val = val.date()
+
+            # Se for número em pt-br, tenta converter (opcional)
+            if site_col != "Data":
+                val = br_to_float(val)
+
+            ws[f"{excel_col}{row}"].value = val
+        row += 1
+
+    # formata data como dd/mm/aaaa na coluna da Data
+    date_excel_col = col_map["Data"]
+    for rr in range(start_row, row):
+        ws[f"{date_excel_col}{rr}"].number_format = "DD/MM/YYYY"
+
+    wb.save(path)
+    return row - start_row
+
+
+# =========================
+# MAIN
+# =========================
+def main():
+    last = find_last_date_in_excel(EXCEL_PATH, SHEET_NAME, DATE_COL_EXCEL)
+    today = datetime.now().date()
+
+    dt_ini = last + timedelta(days=1) if START_FROM_NEXT_DAY else last
+    dt_fim = today
+
+    if dt_ini > dt_fim:
+        print(f"[OK] Nada a fazer. Última data na planilha ({last}) já é >= hoje ({today}).")
+        return
+
+    print(f"[INFO] Planilha: última data={last} | Vou buscar: {dt_ini} até {dt_fim}")
+
+    df = fetch_table(dt_ini, dt_fim)
+
+    # Se o site retornar também a data "dt_ini" e você estiver usando +1 dia, ok.
+    # Se quiser garantir que não duplica:
+    df = df[df["Data"] >= dt_ini].copy()
+
+    print("[INFO] Colunas retornadas pelo site:", list(df.columns))
+    print("[INFO] Primeiras linhas:\n", df.head(3))
+
+    # opcional: se você quiser enxergar os headers e ajustar o COLUMN_MAP:
+    missing = [c for c in COLUMN_MAP.keys() if c not in df.columns]
+    if missing:
+        raise RuntimeError(
+            f"Seu COLUMN_MAP tem colunas que não existem no retorno: {missing}\n"
+            f"Colunas disponíveis: {list(df.columns)}\n"
+            "Ajuste COLUMN_MAP para casar com os headers reais do site."
+        )
+
+    n = append_to_excel(df, EXCEL_PATH, SHEET_NAME, DATE_COL_EXCEL, COLUMN_MAP)
+    print(f"[OK] Adicionei {n} linhas em {EXCEL_PATH} / {SHEET_NAME}.")
+
+
+if __name__ == "__main__":
+    main()
