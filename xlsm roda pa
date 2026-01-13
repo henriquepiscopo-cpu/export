@@ -1,0 +1,325 @@
+import re
+from io import StringIO
+from datetime import datetime, date, timedelta
+from pathlib import Path
+from typing import Dict, Optional
+
+import pandas as pd
+import requests
+from openpyxl import load_workbook
+
+
+# =========================
+# AJUSTE AQUI (WINDOWS EXEMPLO)
+# =========================
+# EXCEL_PATH = Path(r"C:\Users\i467182\Documents\volume negociado.xlsm")  # <- se for xlsm
+EXCEL_PATH = Path("volume negociado.xlsx")  # <- se estiver na mesma pasta e for xlsx/xlsm
+SHEET_NAME = "Planilha1"
+DATE_COL_EXCEL = "D"
+
+COLUMN_MAP: Dict[str, str] = {
+    "Data": "D",
+    "Volume Negociado em Moeda da Época": "E",
+}
+
+START_FROM_NEXT_DAY = True
+
+URL_FORM = "https://www.debentures.com.br/exploreosnd/consultaadados/mercadosecundario/volumesnegociados_f.asp"
+URL_POST = "https://www.debentures.com.br/exploreosnd/consultaadados/mercadosecundario/volumesnegociados_r.asp"
+
+
+# =========================
+# HELPERS
+# =========================
+_PTBR_NUM = re.compile(r"^\s*\d{1,3}(\.\d{3})+(,\d+)?\s*$")   # 1.234.567,89
+_ENUS_NUM = re.compile(r"^\s*\d{1,3}(,\d{3})+(\.\d+)?\s*$")   # 1,234,567.89
+
+def load_wb(path: Path):
+    """Abre workbook preservando VBA quando for XLSM."""
+    return load_workbook(path, keep_vba=path.suffix.lower() == ".xlsm")
+
+def to_number(x) -> Optional[float]:
+    """
+    Converte com segurança para float:
+    - Se já for número, devolve float.
+    - Se for string pt-BR (1.234.567,89), converte certo.
+    - Se for string en-US (1,234,567.89), converte certo.
+    - Se for string simples (1234,56 / 1234.56), converte.
+    """
+    if x is None or pd.isna(x):
+        return None
+
+    if isinstance(x, (int, float)):
+        return float(x)
+
+    s = str(x).strip()
+    if s == "" or s.lower() in {"nan", "none", "-"}:
+        return None
+
+    s = re.sub(r"[R$\s]", "", s)
+
+    if _PTBR_NUM.match(s):
+        s2 = s.replace(".", "").replace(",", ".")
+        try:
+            return float(s2)
+        except:
+            return None
+
+    if _ENUS_NUM.match(s):
+        s2 = s.replace(",", "")
+        try:
+            return float(s2)
+        except:
+            return None
+
+    # "1234,56"
+    if s.count(",") == 1 and s.count(".") == 0:
+        try:
+            return float(s.replace(",", "."))
+        except:
+            return None
+
+    # "1234.56"
+    if s.count(".") == 1 and s.count(",") == 0:
+        try:
+            return float(s)
+        except:
+            return None
+
+    # fallback conservador: tenta manter só dígitos e sinal
+    only = re.sub(r"[^\d\-]", "", s)
+    if only and only != s:
+        try:
+            return float(only)
+        except:
+            return None
+
+    return None
+
+def parse_excel_date(v) -> Optional[date]:
+    if v is None:
+        return None
+    if isinstance(v, datetime):
+        return v.date()
+    if isinstance(v, date):
+        return v
+    s = str(v).strip()
+    if not s:
+        return None
+    for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y"):
+        try:
+            return datetime.strptime(s, fmt).date()
+        except:
+            pass
+    return None
+
+def find_last_date_in_excel(path: Path, sheet: str, date_col: str) -> date:
+    wb = load_wb(path)
+    if sheet not in wb.sheetnames:
+        raise KeyError(f"Aba '{sheet}' não existe. Abas disponíveis: {wb.sheetnames}")
+    ws = wb[sheet]
+
+    last_row = ws.max_row
+    while last_row > 1 and ws[f"{date_col}{last_row}"].value in (None, ""):
+        last_row -= 1
+
+    last_val = ws[f"{date_col}{last_row}"].value
+    d = parse_excel_date(last_val)
+    if d is None:
+        raise RuntimeError(f"Não consegui ler a última data em {sheet}!{date_col}{last_row}. Valor={last_val!r}")
+    return d
+
+def excel_next_append_row(path: Path, sheet: str, date_col: str) -> int:
+    wb = load_wb(path)
+    ws = wb[sheet]
+    r = ws.max_row
+    while r > 1 and ws[f"{date_col}{r}"].value in (None, ""):
+        r -= 1
+    return r + 1
+
+def format_br(d: date) -> str:
+    return d.strftime("%d/%m/%Y")
+
+
+# =========================
+# FETCH TABLE
+# =========================
+def fetch_table(dt_ini: date, dt_fim: date) -> pd.DataFrame:
+    s = requests.Session()
+    headers_get = {
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
+    }
+
+    s.get(URL_FORM, headers=headers_get, timeout=30).raise_for_status()
+
+    headers_post = {
+        "User-Agent": headers_get["User-Agent"],
+        "Accept": headers_get["Accept"],
+        "Accept-Language": headers_get["Accept-Language"],
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Origin": "https://www.debentures.com.br",
+        "Referer": URL_FORM,
+    }
+
+    form = {
+        "op_exc": "False",
+        "dt_ini": format_br(dt_ini),
+        "dt_fim": format_br(dt_fim),
+        "Submit32.x": "31",
+        "Submit32.y": "13",
+    }
+
+    r = s.post(URL_POST, headers=headers_post, data=form, timeout=60)
+    r.raise_for_status()
+    html = r.text
+
+    tables = pd.read_html(StringIO(html), header=None)
+    if not tables:
+        Path("debug_volumesnegociados.html").write_text(html, encoding="utf-8")
+        raise RuntimeError("Não encontrei tabela no HTML (salvei debug_volumesnegociados.html).")
+
+    date_regex = re.compile(r"^\s*\d{2}/\d{2}/\d{4}\s*$")
+
+    chosen = None
+    for t in tables:
+        for c in t.columns:
+            hits = t[c].astype(str).str.strip().str.match(date_regex, na=False).sum()
+            if hits >= 1:
+                chosen = t.copy()
+                break
+        if chosen is not None:
+            break
+
+    if chosen is None:
+        Path("debug_volumesnegociados.html").write_text(html, encoding="utf-8")
+        raise RuntimeError("Não achei coluna com datas dd/mm/aaaa. Salvei debug_volumesnegociados.html.")
+
+    df_raw = chosen.copy()
+
+    # tenta achar header (linha contendo "data" e "volume")
+    header_row = None
+    for i in range(min(25, len(df_raw))):
+        row_txt = df_raw.iloc[i].astype(str).str.strip().str.lower().tolist()
+        has_data = any("data" in x for x in row_txt)
+        has_vol = any("volume" in x for x in row_txt)
+        if has_data and has_vol:
+            header_row = i
+            break
+
+    if header_row is not None:
+        headers = df_raw.iloc[header_row].astype(str).str.strip().tolist()
+        df = df_raw.iloc[header_row + 1 :].copy()
+        df.columns = headers
+    else:
+        df = df_raw.copy()
+        df = df.rename(columns={0: "Data", 1: "Volume Negociado em Moeda da Época"})
+
+    df.columns = [str(c).strip() for c in df.columns]
+
+    # garante Data
+    if "Data" not in df.columns:
+        cand = None
+        for c in df.columns:
+            hits = df[c].astype(str).str.strip().str.match(date_regex, na=False).sum()
+            if hits >= 1:
+                cand = c
+                break
+        if cand is None:
+            raise RuntimeError(f"Não consegui identificar coluna Data. Colunas: {list(df.columns)}")
+        df = df.rename(columns={cand: "Data"})
+
+    # garante volume
+    if "Volume Negociado em Moeda da Época" not in df.columns:
+        non_data_cols = [c for c in df.columns if c != "Data"]
+        if non_data_cols:
+            df = df.rename(columns={non_data_cols[0]: "Volume Negociado em Moeda da Época"})
+
+    # converte Data
+    df["Data"] = pd.to_datetime(df["Data"].astype(str).str.strip(), dayfirst=True, errors="coerce").dt.date
+    df = df[df["Data"].notna()].copy()
+
+    # converte volume com segurança
+    df["Volume Negociado em Moeda da Época"] = df["Volume Negociado em Moeda da Época"].apply(to_number)
+
+    df = df.sort_values("Data").reset_index(drop=True)
+    df = df[["Data", "Volume Negociado em Moeda da Época"]].copy()
+
+    return df
+
+
+# =========================
+# APPEND TO EXCEL (preserva XLSM)
+# =========================
+def append_to_excel(df: pd.DataFrame, path: Path, sheet: str, date_col_excel: str, col_map: Dict[str, str]) -> int:
+    wb = load_wb(path)
+    ws = wb[sheet]
+
+    start_row = excel_next_append_row(path, sheet, date_col_excel)
+
+    key_data = next((k for k in col_map.keys() if str(k).strip().lower() == "data"), None)
+    if not key_data:
+        raise RuntimeError("COLUMN_MAP precisa ter a chave 'Data' apontando para a coluna de data no Excel.")
+
+    missing = [c for c in col_map.keys() if c not in df.columns]
+    if missing:
+        raise RuntimeError(
+            f"Seu COLUMN_MAP tem colunas que não existem no retorno: {missing}\n"
+            f"Colunas disponíveis: {list(df.columns)}"
+        )
+
+    row = start_row
+    for _, r in df.iterrows():
+        # Data
+        dval = r.get(key_data)
+        ws[f"{col_map[key_data]}{row}"].value = dval
+        ws[f"{col_map[key_data]}{row}"].number_format = "DD/MM/YYYY"
+
+        # Volume
+        for site_col, excel_col in col_map.items():
+            if str(site_col).strip().lower() == "data":
+                continue
+
+            num = to_number(r.get(site_col))
+            ws[f"{excel_col}{row}"].value = None if num is None else round(float(num), 2)
+            ws[f"{excel_col}{row}"].number_format = "#,##0.00"
+
+        row += 1
+
+    wb.save(path)
+    return row - start_row
+
+
+# =========================
+# MAIN
+# =========================
+def main():
+    if not EXCEL_PATH.exists():
+        raise FileNotFoundError(f"Não achei o arquivo: {EXCEL_PATH.resolve()}")
+
+    last = find_last_date_in_excel(EXCEL_PATH, SHEET_NAME, DATE_COL_EXCEL)
+    today = datetime.now().date()
+
+    dt_ini = last + timedelta(days=1) if START_FROM_NEXT_DAY else last
+    dt_fim = today
+
+    if dt_ini > dt_fim:
+        print(f"[OK] Nada a fazer. Última data ({last}) já é >= hoje ({today}).")
+        return
+
+    print(f"[INFO] Última data na planilha={last} | Vou buscar: {dt_ini} até {dt_fim}")
+
+    df = fetch_table(dt_ini, dt_fim)
+
+    # evita duplicar
+    df = df[df["Data"] >= dt_ini].copy()
+
+    print("[INFO] Preview:\n", df.head(3))
+
+    n = append_to_excel(df, EXCEL_PATH, SHEET_NAME, DATE_COL_EXCEL, COLUMN_MAP)
+    print(f"[OK] Adicionei {n} linhas em {EXCEL_PATH} / {SHEET_NAME}.")
+
+
+if __name__ == "__main__":
+    main()
