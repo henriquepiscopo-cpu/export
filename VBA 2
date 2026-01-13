@@ -1,0 +1,75 @@
+Option Explicit
+
+Sub AtualizarNovasLinhas_VolumeEFormulas()
+    Dim ws As Worksheet
+    Set ws = ActiveSheet   ' ou: Set ws = ThisWorkbook.Worksheets("Planilha1")
+
+    ' ====== CONFIG ======
+    Const HEADER_ROW As Long = 1
+    Const FIRST_DATA_ROW As Long = 2
+
+    Const COL_DATA As String = "D"   ' coluna que sempre tem data (para achar última linha)
+    Const COL_VOLUME As String = "E" ' coluna a dividir por 1e9
+    Const COL_F As String = "F"
+    Const COL_G As String = "G"
+
+    Const MARKER_CELL As String = "Z1" ' guarda a última linha já processada
+    Const DIVISOR As Double = 1000000000#
+    ' ====================
+
+    Dim lastRow As Long, lastDone As Long, newStart As Long
+    Dim rngVol As Range, rngFG As Range
+    Dim i As Long, v
+
+    Application.ScreenUpdating = False
+    Application.EnableEvents = False
+    Application.Calculation = xlCalculationManual
+
+    ' Última linha com data
+    lastRow = ws.Cells(ws.Rows.Count, COL_DATA).End(xlUp).Row
+    If lastRow < FIRST_DATA_ROW Then GoTo Fim ' não tem dados
+
+    ' Última linha já processada (marker)
+    If IsNumeric(ws.Range(MARKER_CELL).Value) Then
+        lastDone = CLng(ws.Range(MARKER_CELL).Value)
+    Else
+        lastDone = HEADER_ROW ' nunca rodou
+    End If
+
+    newStart = Application.WorksheetFunction.Max(lastDone + 1, FIRST_DATA_ROW)
+
+    If newStart > lastRow Then GoTo Fim ' não há linhas novas
+
+    ' 1) Divide por 1e9 apenas as linhas novas na coluna E
+    Set rngVol = ws.Range(COL_VOLUME & newStart & ":" & COL_VOLUME & lastRow)
+
+    For i = 1 To rngVol.Rows.Count
+        v = rngVol.Cells(i, 1).Value
+        If IsNumeric(v) And Not IsEmpty(v) Then
+            rngVol.Cells(i, 1).Value = CDbl(v) / DIVISOR
+        End If
+    Next i
+
+    ' 2) Puxa fórmulas nas colunas F e G até a última linha nova
+    ' Se F/G na linha newStart já estiverem vazias, copia do row acima
+    Set rngFG = ws.Range(COL_F & newStart & ":" & COL_G & lastRow)
+
+    If newStart = FIRST_DATA_ROW Then
+        ' Se os dados começam na primeira linha, usa a linha 2 como template
+        ws.Range(COL_F & FIRST_DATA_ROW & ":" & COL_G & FIRST_DATA_ROW).AutoFill _
+            Destination:=ws.Range(COL_F & FIRST_DATA_ROW & ":" & COL_G & lastRow)
+    Else
+        ' Usa a linha anterior como template (mantém referências relativas)
+        ws.Range(COL_F & (newStart - 1) & ":" & COL_G & (newStart - 1)).AutoFill _
+            Destination:=ws.Range(COL_F & (newStart - 1) & ":" & COL_G & lastRow)
+    End If
+
+    ' Atualiza o marcador
+    ws.Range(MARKER_CELL).Value = lastRow
+    ws.Range(MARKER_CELL).EntireColumn.Hidden = True ' opcional: esconder coluna Z
+
+Fim:
+    Application.Calculation = xlCalculationAutomatic
+    Application.EnableEvents = True
+    Application.ScreenUpdating = True
+End Sub
