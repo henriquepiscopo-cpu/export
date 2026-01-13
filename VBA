@@ -1,0 +1,37 @@
+Option Explicit
+
+Sub AtualizarResumo()
+    Dim ws As Worksheet
+    Dim lastF As Long, lastG As Long
+    Dim targetRowF As Long
+    
+    Set ws = ThisWorkbook.Worksheets("Planilha 1")
+    
+    ' Última linha preenchida em F e G
+    lastF = ws.Cells(ws.Rows.Count, "F").End(xlUp).Row
+    lastG = ws.Cells(ws.Rows.Count, "G").End(xlUp).Row
+    
+    ' Validações básicas (caso colunas estejam vazias)
+    If lastG < 1 Then
+        MsgBox "Coluna G vazia.", vbExclamation
+        Exit Sub
+    End If
+    If lastF < 1 Then
+        MsgBox "Coluna F vazia.", vbExclamation
+        Exit Sub
+    End If
+    
+    ' J4 = última coisa na coluna G
+    ws.Range("J4").Value = ws.Cells(lastG, "G").Value
+    
+    ' J6 = última coisa na coluna F
+    ws.Range("J6").Value = ws.Cells(lastF, "F").Value
+    
+    ' J5 = 4 células antes da última coisa na coluna F (ex.: F300 -> F296)
+    targetRowF = lastF - 4
+    If targetRowF < 1 Then
+        MsgBox "Não há linhas suficientes na coluna F para pegar 4 antes do último.", vbExclamation
+        Exit Sub
+    End If
+    ws.Range("J5").Value = ws.Cells(targetRowF, "F").Value
+End Sub
