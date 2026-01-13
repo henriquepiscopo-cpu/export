@@ -2,84 +2,98 @@ Option Explicit
 
 Sub AtualizarNovasLinhas_VolumeEFormulas()
     Dim ws As Worksheet
-    Set ws = ThisWorkbook.Worksheets("Planilha1") ' <-- ajuste se necessário
+    Set ws = ThisWorkbook.Worksheets("Planilha1") ' ajuste se necessário
 
-    ' ===== CONFIG =====
-    Const HEADER_ROW As Long = 1
     Const FIRST_DATA_ROW As Long = 2
-
-    Const COL_DATA As String = "D"   ' data
-    Const COL_VOLUME As String = "E" ' dividir por 1e9
+    Const COL_DATA As String = "D"
+    Const COL_VOLUME As String = "E"
     Const COL_F As String = "F"
     Const COL_G As String = "G"
-
-    Const FORMULA_START_ROW As Long = 269 ' você pediu "a partir da 269"
-    Const MARKER_CELL As String = "Z1"    ' guarda última linha já processada
+    Const FORMULA_START_ROW As Long = 269
+    Const MARKER_CELL As String = "Z1"
     Const DIVISOR As Double = 1000000000#
-    ' ==================
 
     Dim lastRow As Long, lastDone As Long, newStart As Long
     Dim templateRow As Long
     Dim r As Long
+    Dim didSomething As Boolean
 
     Application.ScreenUpdating = False
     Application.EnableEvents = False
     Application.Calculation = xlCalculationManual
 
-    ' última linha com dados (pela coluna de data)
     lastRow = ws.Cells(ws.Rows.Count, COL_DATA).End(xlUp).Row
-    If lastRow < FIRST_DATA_ROW Then GoTo Fim
+    If lastRow < FIRST_DATA_ROW Then
+        MsgBox "Não há dados (coluna D vazia).", vbInformation
+        GoTo Fim
+    End If
 
-    ' Se é a primeira vez (Z1 vazio), só inicializa e NÃO mexe no histórico
+    ' Se Z1 vazio: inicializa e avisa
     If Len(ws.Range(MARKER_CELL).Value) = 0 Or Not IsNumeric(ws.Range(MARKER_CELL).Value) Then
         ws.Range(MARKER_CELL).Value = lastRow
         ws.Range(MARKER_CELL).EntireColumn.Hidden = True
+        MsgBox "Inicializei o marcador (Z1) com a última linha atual: " & lastRow & _
+               vbCrLf & "Agora rode o botão novamente depois que novas linhas forem coladas.", vbInformation
         GoTo Fim
     End If
 
     lastDone = CLng(ws.Range(MARKER_CELL).Value)
     newStart = Application.WorksheetFunction.Max(lastDone + 1, FIRST_DATA_ROW)
 
-    ' nada novo
-    If newStart > lastRow Then GoTo Fim
+    If newStart > lastRow Then
+        MsgBox "Nada novo para processar." & vbCrLf & _
+               "Z1 (última linha processada) = " & lastDone & vbCrLf & _
+               "Última linha atual = " & lastRow, vbInformation
+        GoTo Fim
+    End If
 
-    ' -------- 1) dividir SOMENTE as linhas novas --------
+    ' 1) Divide só linhas novas
     For r = newStart To lastRow
         If IsNumeric(ws.Cells(r, COL_VOLUME).Value) And Not IsEmpty(ws.Cells(r, COL_VOLUME).Value) Then
             ws.Cells(r, COL_VOLUME).Value = CDbl(ws.Cells(r, COL_VOLUME).Value) / DIVISOR
+            didSomething = True
         End If
     Next r
 
-    ' -------- 2) achar uma linha com FÓRMULA em F e G, começando em 269 --------
+    ' 2) Acha uma linha com fórmula em F ou G a partir da 269
     templateRow = 0
     For r = FORMULA_START_ROW To Application.WorksheetFunction.Min(lastRow, FORMULA_START_ROW + 2000)
         If ws.Cells(r, COL_F).HasFormula Or ws.Cells(r, COL_G).HasFormula Then
-            ' basta ter fórmula em pelo menos uma; se quiser exigir as duas, troque OR por AND
             templateRow = r
             Exit For
         End If
     Next r
 
     If templateRow = 0 Then
-        ' Não achou fórmula — para não copiar título/valor
-        MsgBox "Não encontrei fórmulas em F/G a partir da linha " & FORMULA_START_ROW & ".", vbExclamation
+        MsgBox "Processou volume nas linhas novas, mas NÃO achei fórmula em F/G a partir da linha " & FORMULA_START_ROW & ".", vbExclamation
         GoTo AtualizaMarker
     End If
 
-    ' -------- 3) copiar SOMENTE as fórmulas para as linhas novas --------
-    ' F
+    ' 3) Copia SOMENTE as fórmulas (R1C1) para as linhas novas
     If ws.Cells(templateRow, COL_F).HasFormula Then
         ws.Range(COL_F & newStart & ":" & COL_F & lastRow).FormulaR1C1 = ws.Cells(templateRow, COL_F).FormulaR1C1
+        didSomething = True
     End If
-    ' G
+
     If ws.Cells(templateRow, COL_G).HasFormula Then
         ws.Range(COL_G & newStart & ":" & COL_G & lastRow).FormulaR1C1 = ws.Cells(templateRow, COL_G).FormulaR1C1
+        didSomething = True
     End If
 
 AtualizaMarker:
-    ' atualiza marcador para não reprocessar
     ws.Range(MARKER_CELL).Value = lastRow
     ws.Range(MARKER_CELL).EntireColumn.Hidden = True
+
+    If didSomething Then
+        MsgBox "OK!" & vbCrLf & _
+               "Linhas novas: " & newStart & " até " & lastRow & vbCrLf & _
+               "Fórmula modelo encontrada na linha: " & templateRow & vbCrLf & _
+               "Z1 atualizado para: " & lastRow, vbInformation
+    Else
+        MsgBox "Rodou, mas não alterou valores." & vbCrLf & _
+               "Linhas novas: " & newStart & " até " & lastRow & vbCrLf & _
+               "Cheque se a coluna E tem números e se F/G têm fórmula a partir da 269.", vbInformation
+    End If
 
 Fim:
     Application.Calculation = xlCalculationAutomatic
