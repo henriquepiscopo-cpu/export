@@ -1,0 +1,7 @@
+Sub Botao_AtualizarTudo()
+    ' 1) roda seu macro antigo (troque pelo nome exato)
+    Call NomeDoSeuMacroAntigo
+
+    ' 2) roda o macro novo de dividir por 1e9 e puxar fórmulas
+    Call AtualizarNovasLinhas_VolumeEFormulas
+End Sub
