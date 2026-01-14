@@ -1,4 +1,5 @@
 import os
+import sys
 import certifi
 import requests
 import pandas as pd
@@ -9,7 +10,9 @@ from urllib3.util.retry import Retry
 
 # ================= CONFIG =================
 DOWNLOAD_URL = "https://www.debentures.com.br/exploreosnd/consultaadados/emissoesdedebentures/caracteristicas_e.asp"
-OUT_XLSX = "Debentures_Caracteristicas_1990_ate_hoje.xlsx"
+
+OUT_XLSX_NAME = "Debentures_Caracteristicas_1990_ate_hoje.xlsx"
+LOG_NAME = "debentures_log.txt"
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0",
@@ -21,9 +24,37 @@ HEADERS = {
 # =========================================
 
 
+def exe_dir() -> str:
+    """Pasta onde está o exe (ou o script, quando rodando em .py)."""
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+def out_path(filename: str) -> str:
+    return os.path.join(exe_dir(), filename)
+
+
+def resource_path(relative: str) -> str:
+    """
+    Acha arquivos empacotados no PyInstaller (um-file) via _MEIPASS.
+    """
+    base = getattr(sys, "_MEIPASS", None)
+    if base:
+        return os.path.join(base, relative)
+    return relative
+
+
+def log(msg: str) -> None:
+    p = out_path(LOG_NAME)
+    with open(p, "a", encoding="utf-8") as f:
+        f.write(msg.rstrip() + "\n")
+    print(msg)
+
+
 def build_session() -> requests.Session:
     s = requests.Session()
-    s.trust_env = True
+    s.trust_env = True  # usa proxy do ambiente se existir
 
     retry = Retry(
         total=7,
@@ -41,25 +72,15 @@ def fmt_ptbr(d: date) -> str:
 
 
 def parse_tsv_xls_to_df(content: bytes) -> pd.DataFrame:
-    """
-    O 'xls' do site é TSV (tab-separated).
-    Aqui:
-      - corta page break (\x0c)
-      - remove caracteres nulos
-      - lê TSV
-      - limpa ticker (1ª coluna)
-      - remove rodapés/cabeçalhos repetidos
-    """
     raw = content.decode("latin1", errors="ignore")
 
-    # 🔧 quebra de página típica desses exports antigos
+    # quebra de página típica (às vezes)
     if "\x0c" in raw:
         raw = raw.split("\x0c", 1)[0]
 
     raw = raw.replace("\x00", "")
     lines = raw.splitlines()
 
-    # acha header real
     header_i = None
     for i, line in enumerate(lines[:400]):
         if line.strip().lower().startswith("codigo do ativo"):
@@ -68,14 +89,12 @@ def parse_tsv_xls_to_df(content: bytes) -> pd.DataFrame:
 
     if header_i is None:
         preview = "\n".join(lines[:80])
-        raise RuntimeError(
-            "Não achei o cabeçalho ('Codigo do Ativo').\n\nPreview:\n" + preview
-        )
+        raise RuntimeError("Não achei o cabeçalho ('Codigo do Ativo'). Preview:\n" + preview)
 
     tsv = "\n".join(lines[header_i:])
     df = pd.read_csv(StringIO(tsv), sep="\t", engine="python").dropna(how="all")
 
-    # 🔧 limpa ticker/código (1ª coluna)
+    # limpa ticker/código (1ª coluna)
     ticker_col = df.columns[0]
     df[ticker_col] = (
         df[ticker_col]
@@ -84,10 +103,8 @@ def parse_tsv_xls_to_df(content: bytes) -> pd.DataFrame:
         .str.rstrip()
     )
 
-    # remove linhas sem ticker
     df = df[df[ticker_col].astype(str).str.strip() != ""]
 
-    # remove cabeçalho repetido e rodapés
     lixo = r"^(codigo do ativo|total|observa|obs\.?|fim|continua|página|pagina)\b"
     df = df[~df[ticker_col].astype(str).str.strip().str.lower().str.match(lixo, na=False)]
 
@@ -95,6 +112,12 @@ def parse_tsv_xls_to_df(content: bytes) -> pd.DataFrame:
 
 
 def main():
+    # limpa log a cada execução
+    try:
+        open(out_path(LOG_NAME), "w", encoding="utf-8").close()
+    except Exception:
+        pass
+
     hoje = date.today()
     inicio = date(1990, 1, 1)
 
@@ -141,30 +164,45 @@ def main():
         "Submit.y": "15",
     }
 
-    print(f"📅 Intervalo CVM: {params['cvm_ini']} → {params['cvm_fim']}")
+    log(f"📅 Intervalo CVM: {params['cvm_ini']} → {params['cvm_fim']}")
+    log(f"📁 Saída: {out_path(OUT_XLSX_NAME)}")
+    log(f"📁 CWD: {os.getcwd()}")
+
+    # ⚠️ certifi no EXE: aponte pro cacert empacotado se existir
+    cacert = resource_path(os.path.basename(certifi.where()))
+    if not os.path.exists(cacert):
+        cacert = certifi.where()
+    log(f"🔐 CA bundle: {cacert}")
 
     s = build_session()
+
     r = s.get(
         DOWNLOAD_URL,
         params=params,
         headers=HEADERS,
         timeout=(10, 180),
-        verify=certifi.where(),
+        verify=cacert,
     )
     r.raise_for_status()
 
     df = parse_tsv_xls_to_df(r.content)
 
-    # ✅ FILTRO CRÍTICO: somente debêntures registradas
+    # somente registrado (como o “original”)
     if "Situacao" in df.columns:
         df["Situacao"] = df["Situacao"].astype(str).str.strip()
         df = df[df["Situacao"].str.lower() == "registrado"].copy()
 
-    df.to_excel(OUT_XLSX, index=False)
+    out_xlsx = out_path(OUT_XLSX_NAME)
+    df.to_excel(out_xlsx, index=False)
 
-    print(f"✅ XLSX salvo: {os.path.abspath(OUT_XLSX)}")
-    print(f"📌 Linhas finais: {len(df)} | Colunas: {len(df.columns)}")
+    log(f"✅ OK! Linhas finais: {len(df)} | Colunas: {len(df.columns)}")
+    log(f"✅ XLSX salvo: {out_xlsx}")
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        log("❌ ERRO:")
+        log(repr(e))
+        raise
