@@ -1,0 +1,170 @@
+import os
+import certifi
+import requests
+import pandas as pd
+from io import StringIO
+from datetime import date
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
+# ================= CONFIG =================
+DOWNLOAD_URL = "https://www.debentures.com.br/exploreosnd/consultaadados/emissoesdedebentures/caracteristicas_e.asp"
+OUT_XLSX = "Debentures_Caracteristicas_1990_ate_hoje.xlsx"
+
+HEADERS = {
+    "User-Agent": "Mozilla/5.0",
+    "Accept": "*/*",
+    "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
+    "Connection": "close",
+    "Referer": "https://www.debentures.com.br/",
+}
+# =========================================
+
+
+def build_session() -> requests.Session:
+    s = requests.Session()
+    s.trust_env = True
+
+    retry = Retry(
+        total=7,
+        backoff_factor=0.8,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["GET"],
+        raise_on_status=False,
+    )
+    s.mount("https://", HTTPAdapter(max_retries=retry))
+    return s
+
+
+def fmt_ptbr(d: date) -> str:
+    return d.strftime("%d/%m/%Y")
+
+
+def parse_tsv_xls_to_df(content: bytes) -> pd.DataFrame:
+    """
+    O 'xls' do site é TSV (tab-separated).
+    Aqui:
+      - corta page break (\x0c)
+      - remove caracteres nulos
+      - lê TSV
+      - limpa ticker (1ª coluna)
+      - remove rodapés/cabeçalhos repetidos
+    """
+    raw = content.decode("latin1", errors="ignore")
+
+    # 🔧 quebra de página típica desses exports antigos
+    if "\x0c" in raw:
+        raw = raw.split("\x0c", 1)[0]
+
+    raw = raw.replace("\x00", "")
+    lines = raw.splitlines()
+
+    # acha header real
+    header_i = None
+    for i, line in enumerate(lines[:400]):
+        if line.strip().lower().startswith("codigo do ativo"):
+            header_i = i
+            break
+
+    if header_i is None:
+        preview = "\n".join(lines[:80])
+        raise RuntimeError(
+            "Não achei o cabeçalho ('Codigo do Ativo').\n\nPreview:\n" + preview
+        )
+
+    tsv = "\n".join(lines[header_i:])
+    df = pd.read_csv(StringIO(tsv), sep="\t", engine="python").dropna(how="all")
+
+    # 🔧 limpa ticker/código (1ª coluna)
+    ticker_col = df.columns[0]
+    df[ticker_col] = (
+        df[ticker_col]
+        .astype(str)
+        .str.replace("\xa0", " ", regex=False)
+        .str.rstrip()
+    )
+
+    # remove linhas sem ticker
+    df = df[df[ticker_col].astype(str).str.strip() != ""]
+
+    # remove cabeçalho repetido e rodapés
+    lixo = r"^(codigo do ativo|total|observa|obs\.?|fim|continua|página|pagina)\b"
+    df = df[~df[ticker_col].astype(str).str.strip().str.lower().str.match(lixo, na=False)]
+
+    return df.reset_index(drop=True)
+
+
+def main():
+    hoje = date.today()
+    inicio = date(1990, 1, 1)
+
+    params = {
+        "tip_deb": "publicas",
+        "cvm_ini": fmt_ptbr(inicio),
+        "cvm_fim": fmt_ptbr(hoje),
+
+        # filtros vazios
+        "mnome": "",
+        "ativo": "",
+        "IPO": "",
+        "icvm": "",
+        "EscrituraPadronizada": "",
+        "emis_ini": "",
+        "emis_fim": "",
+        "venc_ini": "",
+        "venc_fim": "",
+        "TPV": "",
+        "TNV": "",
+        "rent_ini": "",
+        "rent_fim": "",
+        "distrib_ini": "",
+        "distrib_fim": "",
+        "indice": "",
+        "tipo": "",
+        "crit_calc": "",
+        "dia_ref": "",
+        "mult_rend": "",
+        "limite": "",
+        "trat_limite": "",
+        "tx_spread": "",
+        "prazo": "",
+        "premio_novo": "",
+        "premio_prazo": "",
+        "premio_antigo": "",
+        "Par": "",
+        "amortizacao": "",
+        "mbanco": "",
+        "magente": "",
+        "instdep": "",
+        "coordenador": "",
+        "Submit.x": "17",
+        "Submit.y": "15",
+    }
+
+    print(f"📅 Intervalo CVM: {params['cvm_ini']} → {params['cvm_fim']}")
+
+    s = build_session()
+    r = s.get(
+        DOWNLOAD_URL,
+        params=params,
+        headers=HEADERS,
+        timeout=(10, 180),
+        verify=certifi.where(),
+    )
+    r.raise_for_status()
+
+    df = parse_tsv_xls_to_df(r.content)
+
+    # ✅ FILTRO CRÍTICO: somente debêntures registradas
+    if "Situacao" in df.columns:
+        df["Situacao"] = df["Situacao"].astype(str).str.strip()
+        df = df[df["Situacao"].str.lower() == "registrado"].copy()
+
+    df.to_excel(OUT_XLSX, index=False)
+
+    print(f"✅ XLSX salvo: {os.path.abspath(OUT_XLSX)}")
+    print(f"📌 Linhas finais: {len(df)} | Colunas: {len(df.columns)}")
+
+
+if __name__ == "__main__":
+    main()
