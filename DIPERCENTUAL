@@ -1,0 +1,202 @@
+import os
+import requests
+import pandas as pd
+from datetime import date, timedelta
+from io import BytesIO
+
+# ================= CONFIGURAÇÕES =================
+BASE_URL = "https://www.anbima.com.br/informacoes/merc-sec-debentures/arqs"
+EXCEL_DESTINO = "MercadoSecundario_ANBIMA.xlsx"
+
+ABA_DI_FONTE = "DI_PERCENTUAL"
+ABA_DI_SPREAD = "DI_SPREAD"
+ABA_IPCA_FONTE = "IPCA_SPREAD"
+
+HEADERS = {
+    "User-Agent": "Mozilla/5.0",
+    "Referer": "https://www.anbima.com.br/",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
+}
+
+MESES_EN = {
+    1: "jan", 2: "feb", 3: "mar", 4: "abr",
+    5: "mai", 6: "jun", 7: "jul", 8: "aug",
+    9: "set", 10: "out", 11: "nov", 12: "dez",
+}
+
+DIAS_CORRIDOS_VARREDURA = 15
+# =================================================
+
+
+def montar_url(dt: date) -> str:
+    yy = dt.strftime("%y")
+    dd = dt.strftime("%d")
+    mon = MESES_EN[dt.month]
+    return f"{BASE_URL}/d{yy}{mon}{dd}.xls"
+
+
+def baixar_excel(dt: date) -> BytesIO | None:
+    """
+    Baixa o arquivo e só aceita se for XLS antigo (OLE).
+    Se vier HTML/erro com status 200, rejeita e mostra preview no terminal.
+    """
+    url = montar_url(dt)
+    resp = requests.get(url, headers=HEADERS, timeout=30, allow_redirects=True)
+
+    ct = (resp.headers.get("Content-Type") or "").lower()
+    size = len(resp.content or b"")
+
+    ole_sig = b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1"
+    is_xls_ole = size >= 8 and resp.content[:8] == ole_sig
+
+    if resp.status_code != 200 or not resp.content:
+        print(f"   ↳ ❌ status={resp.status_code} size={size} ct={ct}")
+        return None
+
+    if not is_xls_ole:
+        preview = resp.content[:160]
+        print(f"   ↳ ❌ não é XLS (status={resp.status_code} size={size} ct={ct}) preview={preview!r}")
+        return None
+
+    return BytesIO(resp.content)
+
+
+def _achar_linha_cabecalho(df_raw: pd.DataFrame) -> int | None:
+    """
+    Procura a linha onde começa a tabela (contém 'Código' e 'Nome').
+    """
+    alvo1 = "código"
+    alvo2 = "nome"
+    for i in range(min(len(df_raw), 140)):
+        linha = df_raw.iloc[i].astype(str).str.strip().str.lower()
+        if (linha == alvo1).any() and (linha == alvo2).any():
+            return i
+    return None
+
+
+def _cortar_ate_fim_tabela(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Corta observações/rodapé: mantém até a última linha onde a 1ª coluna tem conteúdo.
+    """
+    if df.empty:
+        return df
+
+    primeira = df.columns[0]
+    serie = df[primeira]
+    valido = serie.notna() & (serie.astype(str).str.strip() != "")
+
+    if not valido.any():
+        return df.reset_index(drop=True)
+
+    ultimo_idx = valido[valido].index.max()
+    return df.loc[:ultimo_idx].reset_index(drop=True)
+
+
+def ler_aba_limpa(excel_bytes: BytesIO, aba: str) -> pd.DataFrame:
+    """
+    Lê a aba e devolve só a tabela (sem títulos/observações), preservando ordem original.
+    """
+    print(f"📊 Lendo aba: {aba}")
+
+    df_raw = pd.read_excel(excel_bytes, sheet_name=aba, header=None)
+    idx_header = _achar_linha_cabecalho(df_raw)
+
+    if idx_header is None:
+        print("⚠️ Cabeçalho não detectado; usando fallback header=0")
+        df = pd.read_excel(excel_bytes, sheet_name=aba, header=0).dropna(how="all")
+        df = _cortar_ate_fim_tabela(df)
+        print(f"✅ Aba {aba} (fallback): {len(df)} linhas, {len(df.columns)} colunas")
+        return df
+
+    header = df_raw.iloc[idx_header].astype(str).str.strip().tolist()
+    df = df_raw.iloc[idx_header + 1 :].copy()
+    df.columns = header
+    df = df.dropna(how="all")
+
+    # remove colunas vazias/Unnamed
+    cols_validas = []
+    for c in df.columns:
+        nome = str(c).strip()
+        if nome and not nome.lower().startswith("unnamed"):
+            cols_validas.append(c)
+    df = df[cols_validas]
+
+    df = _cortar_ate_fim_tabela(df)
+    print(f"✅ Aba {aba}: {len(df)} linhas, {len(df.columns)} colunas")
+    return df
+
+
+def _ler_tres_abas(bytes_ok: BytesIO) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    di_pct = ler_aba_limpa(bytes_ok, ABA_DI_FONTE)
+    bytes_ok.seek(0)
+    di_spread = ler_aba_limpa(bytes_ok, ABA_DI_SPREAD)
+    bytes_ok.seek(0)
+    ipca = ler_aba_limpa(bytes_ok, ABA_IPCA_FONTE)
+    return di_pct, di_spread, ipca
+
+
+def nome_data(dt: date) -> str:
+    return dt.strftime("%d-%m-%Y")
+
+
+def achar_mais_recente_disponivel() -> tuple[date, BytesIO] | None:
+    """
+    Varre dia-a-dia para trás (ignorando fim de semana) e retorna
+    o PRIMEIRO XLS válido encontrado (mais recente).
+    """
+    print("\n🚀 Procurando a data MAIS RECENTE disponível (varrendo dia a dia)...")
+
+    dt = date.today()
+    varridos = 0
+
+    while varridos < DIAS_CORRIDOS_VARREDURA:
+        varridos += 1
+
+        # ignora fim de semana (se quiser checar fim de semana também, remova este if)
+        if dt.weekday() >= 5:
+            dt -= timedelta(days=1)
+            continue
+
+        url = montar_url(dt)
+        print(f"🔎 Tentando {dt.strftime('%d/%m/%Y')} | {url}")
+
+        b = baixar_excel(dt)
+        if b is not None:
+            print(f"✅ XLS válido em {dt.strftime('%d/%m/%Y')}")
+            print(f"📌 MAIS RECENTE = {dt.strftime('%d/%m/%Y')}\n")
+            return dt, b
+
+        print("❌ Sem XLS válido")
+        dt -= timedelta(days=1)
+
+    print("\n⚠️ Não encontrei XLS válido na janela varrida.")
+    return None
+
+
+def main():
+    print("\n🚀 Iniciando atualização ANBIMA (somente MAIS RECENTE + 3 abas)\n")
+
+    achado = achar_mais_recente_disponivel()
+    if achado is None:
+        return
+
+    dt_rec, bytes_rec = achado
+
+    print("=== 1) Extraindo tabelas da data MAIS RECENTE ===")
+    di_rec, di_spread_rec, ipca_rec = _ler_tres_abas(bytes_rec)
+
+    print("\n=== 2) Salvando no Excel destino ===")
+    mode = "a" if os.path.exists(EXCEL_DESTINO) else "w"
+    writer_kwargs = {"if_sheet_exists": "replace"} if mode == "a" else {}
+
+    with pd.ExcelWriter(EXCEL_DESTINO, engine="openpyxl", mode=mode, **writer_kwargs) as writer:
+        di_rec.to_excel(writer, sheet_name=f"DI_PERCENTUAL ({nome_data(dt_rec)})", index=False)
+        di_spread_rec.to_excel(writer, sheet_name=f"DI_SPREAD ({nome_data(dt_rec)})", index=False)
+        ipca_rec.to_excel(writer, sheet_name=f"IPCA_SPREAD ({nome_data(dt_rec)})", index=False)
+
+    print(f"\n💾 OK! Salvo em '{EXCEL_DESTINO}' com as abas da data {nome_data(dt_rec)}.\n")
+
+
+if __name__ == "__main__":
+    main()
