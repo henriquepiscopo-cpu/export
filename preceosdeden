@@ -1,0 +1,199 @@
+import os
+import re
+import certifi
+import requests
+import pandas as pd
+from io import StringIO
+from datetime import date, timedelta
+from urllib.parse import urljoin
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
+# ================= CONFIG =================
+BASE = "https://www.debentures.com.br"
+FORM_URL = f"{BASE}/exploreosnd/consultaadados/mercadosecundario/precosdenegociacao_f.asp"
+RESULT_URL = f"{BASE}/exploreosnd/consultaadados/mercadosecundario/precosdenegociacao_r.asp"
+OUT_XLSX = "Debentures_PrecosNegociacao_mes_anterior.xlsx"
+
+HEADERS = {
+    "User-Agent": "Mozilla/5.0",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
+    "Origin": "https://www.debentures.com.br",
+    "Referer": FORM_URL,
+}
+# =========================================
+
+
+def build_session() -> requests.Session:
+    s = requests.Session()
+    s.trust_env = True
+    retry = Retry(
+        total=4,
+        backoff_factor=0.6,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["GET", "POST"],
+        raise_on_status=False,
+    )
+    s.mount("https://", HTTPAdapter(max_retries=retry))
+
+    # ajuda no exe (pyinstaller) quando o CA bundle não é achado
+    ca = certifi.where()
+    os.environ.setdefault("SSL_CERT_FILE", ca)
+    os.environ.setdefault("REQUESTS_CA_BUNDLE", ca)
+
+    return s
+
+
+def mes_anterior_fechado(ref: date) -> tuple[date, date]:
+    primeiro_mes_atual = date(ref.year, ref.month, 1)
+    fim = primeiro_mes_atual - timedelta(days=1)
+    ini = date(fim.year, fim.month, 1)
+    return ini, fim
+
+
+def fmt_ptbr(d: date) -> str:
+    return d.strftime("%d/%m/%Y")
+
+
+def yyyymmdd(d: date) -> str:
+    return d.strftime("%Y%m%d")
+
+
+def parse_tsv_export(content: bytes) -> pd.DataFrame:
+    raw = content.decode("latin1", errors="ignore").replace("\x00", "").lstrip("\ufeff")
+    lines = raw.splitlines()
+
+    # header real (Data / Emissor / Ativo / ISIN)
+    header_i = None
+    for i, line in enumerate(lines[:2000]):
+        low = line.strip().lower()
+        if ("data" in low) and ("emissor" in low) and ("ativo" in low) and ("isin" in low):
+            header_i = i
+            break
+    if header_i is None:
+        raise RuntimeError("Não encontrei cabeçalho no export.")
+
+    header = lines[header_i]
+    sep = "\t" if "\t" in header else (";" if ";" in header else None)
+    if sep is None:
+        raise RuntimeError("Separador não detectado no export.")
+
+    ncols = len(header.split(sep))
+
+    cleaned = [lines[header_i]]
+    for line in lines[header_i + 1 :]:
+        if line.strip() and len(line.split(sep)) == ncols:
+            cleaned.append(line)
+
+    if len(cleaned) <= 1:
+        preview = "\n".join(lines[header_i : header_i + 20])
+        raise RuntimeError("Export veio sem dados. Trecho:\n" + preview)
+
+    df = pd.read_csv(
+        StringIO("\n".join(cleaned)),
+        sep=sep,
+        engine="python",
+        dtype=str,
+        keep_default_na=False,
+    ).dropna(how="all")
+
+    # limpa strings
+    obj = df.select_dtypes(include="object").columns
+    if len(obj):
+        df[obj] = df[obj].apply(lambda s: s.astype(str).str.replace("\xa0", " ", regex=False).str.strip())
+
+    return df.reset_index(drop=True)
+
+
+def extrair_download_href(html: str) -> str:
+    m = re.search(r'(?is)href="([^"]*precosdenegociacao_e\.asp[^"]*)"', html)
+    if not m:
+        raise RuntimeError("Não achei link precosdenegociacao_e.asp no HTML do resultado.")
+    return m.group(1).replace("&amp;", "&").strip()
+
+
+def normalizar_export_url(export_url: str, dt_ini: date, dt_fim: date) -> str:
+    # caso bug: &P251201&P251231  (YYMMDD)
+    m = re.search(r'&P(\d{6})&P(\d{6})', export_url)
+    if m:
+        p1, p2 = m.group(1), m.group(2)
+        y1, y2 = 2000 + int(p1[:2]), 2000 + int(p2[:2])
+        export_url = re.sub(r'&P\d{6}&P\d{6}', '', export_url)
+        export_url += f"&dt_ini={y1}{p1[2:4]}{p1[4:6]}&dt_fim={y2}{p2[2:4]}{p2[4:6]}"
+        return export_url
+
+    # se não vier dt_ini/dt_fim, força
+    if "dt_ini=" not in export_url and "dt_fim=" not in export_url:
+        joiner = "&" if "?" in export_url else "?"
+        export_url += joiner + f"dt_ini={yyyymmdd(dt_ini)}&dt_fim={yyyymmdd(dt_fim)}"
+
+    return export_url
+
+
+def duplicar_3a_coluna_entre_1a_e_2a(df: pd.DataFrame) -> pd.DataFrame:
+    if df.shape[1] < 3:
+        return df
+    third_name = df.columns[2]
+    dup_name = f"{third_name}_dup"
+    df.insert(1, dup_name, df.iloc[:, 2])
+    return df
+
+
+def main():
+    dt_ini, dt_fim = mes_anterior_fechado(date.today())
+    print(f"📅 Intervalo (mês anterior): {fmt_ptbr(dt_ini)} → {fmt_ptbr(dt_fim)}")
+
+    s = build_session()
+
+    # aquece sessão/cookies (ASP antigo)
+    s.get(f"{BASE}/", timeout=30, verify=certifi.where())
+    s.get(FORM_URL, timeout=60, headers=HEADERS, verify=certifi.where())
+
+    # 1) gera resultado via POST (igual curl)
+    payload = {
+        "op_exc": "False",
+        "emissor": "",
+        "ativo": "",
+        "ISIN": "",
+        "dt_ini": fmt_ptbr(dt_ini),
+        "dt_fim": fmt_ptbr(dt_fim),
+        "Submit32.x": "27",
+        "Submit32.y": "13",
+    }
+    r1 = s.post(
+        RESULT_URL,
+        data=payload,
+        headers={**HEADERS, "Content-Type": "application/x-www-form-urlencoded"},
+        timeout=(10, 180),
+        verify=certifi.where(),
+    )
+    r1.raise_for_status()
+
+    # 2) pega link do download e monta URL correta
+    href = extrair_download_href(r1.text)
+    export_url = urljoin(RESULT_URL, href)
+    export_url = normalizar_export_url(export_url, dt_ini, dt_fim)
+    print(f"⬇️ Download URL: {export_url}")
+
+    # 3) baixa export (GET)
+    r2 = s.get(
+        export_url,
+        headers={**HEADERS, "Referer": RESULT_URL},
+        timeout=(10, 180),
+        verify=certifi.where(),
+    )
+    r2.raise_for_status()
+
+    # 4) parse e salva
+    df = parse_tsv_export(r2.content)
+
+    # ✅ duplicar 3ª coluna e inserir entre 1ª e 2ª (sem apagar a original)
+    df = duplicar_3a_coluna_entre_1a_e_2a(df)
+
+    df.to_excel(OUT_XLSX, index=False)
+    print(f"✅ XLSX salvo: {os.path.abspath(OUT_XLSX)} | Linhas: {len(df)} | Colunas: {len(df.columns)}")
+
+
+if __name__ == "__main__":
+    main()
