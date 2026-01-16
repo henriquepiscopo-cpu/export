@@ -3,14 +3,14 @@ import re
 import certifi
 import requests
 import pandas as pd
-from io import BytesIO
+from io import BytesIO, StringIO
 from datetime import date
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from openpyxl import load_workbook
 
 # ================= CONFIG (AJUSTE AQUI) =================
-PLANILHA_MAE_PATH = r"/Users/henriquepiscopo/bradesco/MinhaPlanilhaMae.xlsm"  # <-- MUDE AQUI
+PLANILHA_MAE_PATH = r"C:\Users\i467182\Documents\Code\Projetim\MinhaPlanilhaMae.xlsm"  # <-- MUDE AQUI
 ABA_DESTINO = "python"
 # ========================================================
 
@@ -24,12 +24,10 @@ HEADERS = {
     "Referer": "https://www.debentures.com.br/",
 }
 
-
 # ----------------------- HTTP -----------------------
 def build_session() -> requests.Session:
     s = requests.Session()
     s.trust_env = True
-
     retry = Retry(
         total=7,
         backoff_factor=0.8,
@@ -40,7 +38,6 @@ def build_session() -> requests.Session:
     s.mount("https://", HTTPAdapter(max_retries=retry))
     return s
 
-
 # ----------------------- Datas -----------------------
 def mes_ano_anterior(ref=None):
     ref = ref or date.today()
@@ -48,29 +45,14 @@ def mes_ano_anterior(ref=None):
         return 12, ref.year - 1
     return ref.month - 1, ref.year
 
-
-def normalize_period_label(label: str) -> str:
-    """
-    Normaliza '01/2026' -> '1/2026'
-    """
-    m = re.search(r"\b(\d{1,2})/(\d{4})\b", label or "")
-    if not m:
-        return ""
-    return f"{int(m.group(1))}/{m.group(2)}"
-
-
 def current_period_from_html(html: str) -> str:
     m = re.search(r"\b(\d{1,2})/(\d{4})\b", html or "")
     if not m:
         return ""
     return f"{int(m.group(1))}/{m.group(2)}"
 
-
 # ----------------------- WebForms helpers -----------------------
 def parse_hidden(html: str) -> dict:
-    """
-    Pega __VIEWSTATE, __EVENTVALIDATION, __VIEWSTATEGENERATOR
-    """
     hidden = {}
     for name in ["__VIEWSTATE", "__EVENTVALIDATION", "__VIEWSTATEGENERATOR"]:
         m = re.search(rf'id="{re.escape(name)}"\s+value="([^"]*)"', html, flags=re.I)
@@ -78,48 +60,23 @@ def parse_hidden(html: str) -> dict:
             hidden[name] = m.group(1)
     return hidden
 
-
 def find_eventtargets(html: str) -> dict:
-    """
-    Descobre ids úteis na página:
-      - export: ..._lnkex  (você já capturou via __EVENTTARGET) 
-      - prev: algo com 'Mes' + ('Ant' ou 'Prev')  (mês anterior)
-      - next: algo com 'Mes' + ('Prox' ou 'Next') (mês próximo)
-    """
     ids = re.findall(r'id="(ctl00_ContentPlaceHolder1_[^"]+)"', html, flags=re.I)
 
     export_id = None
     prev_id = None
-    next_id = None
 
     for i in ids:
         low = i.lower()
-
-        # export costuma ser lnkex
         if export_id is None and low.endswith("_lnkex"):
             export_id = i
-
-        # mês anterior
         if prev_id is None and ("mes" in low) and (("ant" in low) or ("prev" in low)):
             prev_id = i
 
-        # mês próximo
-        if next_id is None and ("mes" in low) and (("prox" in low) or ("next" in low)):
-            next_id = i
-
-    return {"export": export_id, "prev": prev_id, "next": next_id, "all": ids}
-
+    return {"export": export_id, "prev": prev_id, "all": ids}
 
 def postback(s: requests.Session, eventtarget_id: str, hidden: dict) -> requests.Response:
-    """
-    eventtarget_id vem no formato HTML id: ctl00_ContentPlaceHolder1_lnkex
-    mas o WebForms espera: ctl00$ContentPlaceHolder1$lnkex
-    """
-    if not eventtarget_id:
-        raise RuntimeError("eventtarget_id vazio.")
-
     eventtarget = eventtarget_id.replace("_", "$")
-
     data = {
         "__EVENTTARGET": eventtarget,
         "__EVENTARGUMENT": "",
@@ -127,20 +84,17 @@ def postback(s: requests.Session, eventtarget_id: str, hidden: dict) -> requests
         "__VIEWSTATEGENERATOR": hidden.get("__VIEWSTATEGENERATOR", ""),
         "__EVENTVALIDATION": hidden.get("__EVENTVALIDATION", ""),
     }
-
     r = s.post(URL, data=data, headers=HEADERS, timeout=(10, 180), verify=certifi.where())
     r.raise_for_status()
     return r
 
-
 # ----------------------- Download em memória -----------------------
 def baixar_mes_anterior_em_memoria() -> bytes:
     target_m, target_y = mes_ano_anterior()
-    target_label = normalize_period_label(f"{target_m}/{target_y}")
+    target_label = f"{target_m}/{target_y}"
 
     s = build_session()
 
-    # GET inicial
     r0 = s.get(URL, headers=HEADERS, timeout=(10, 60), verify=certifi.where())
     r0.raise_for_status()
     html = r0.text
@@ -151,39 +105,35 @@ def baixar_mes_anterior_em_memoria() -> bytes:
     if not ids["export"]:
         raise RuntimeError("Não achei o controle de export (lnkex) no HTML.")
     if not ids["prev"]:
-        # debug rápido: lista candidatos relacionados a 'Mes'
         candidates = [i for i in ids["all"] if "mes" in i.lower()]
         raise RuntimeError(
-            "Não achei o controle de mês anterior (MesAnt/MesPrev) no HTML.\n"
-            f"Candidatos relacionados a 'Mes': {candidates[:40]}"
+            "Não achei o controle de mês anterior no HTML.\n"
+            f"Candidatos com 'Mes': {candidates[:40]}"
         )
 
-    cur = normalize_period_label(current_period_from_html(html))
+    cur = current_period_from_html(html)
     if not cur:
         raise RuntimeError("Não consegui detectar o período atual (mm/aaaa) na página.")
 
     print("Período inicial:", cur, "| alvo:", target_label)
 
-    # navega mês a mês até o alvo (normalmente 1 clique, mas deixo genérico)
     for _ in range(36):
         if cur == target_label:
             break
         r = postback(s, ids["prev"], hidden)
         html = r.text
         hidden = parse_hidden(html)
-        cur = normalize_period_label(current_period_from_html(html))
+        cur = current_period_from_html(html)
         if cur:
             print("Agora:", cur)
 
     if cur != target_label:
         raise RuntimeError(f"Não consegui chegar no alvo {target_label}. Parei em {cur}.")
 
-    # exporta (bytes em memória)
     r_export = postback(s, ids["export"], hidden)
 
     cdisp = (r_export.headers.get("Content-Disposition") or "").lower()
     if "attachment" not in cdisp:
-        # salva debug opcional ao lado da planilha-mãe (pra você inspecionar se necessário)
         debug_path = os.path.join(os.path.dirname(PLANILHA_MAE_PATH), "debug_export.html")
         with open(debug_path, "w", encoding="utf-8") as f:
             f.write(r_export.text)
@@ -191,14 +141,21 @@ def baixar_mes_anterior_em_memoria() -> bytes:
 
     return r_export.content
 
-
+# ----------------------- Leitura robusta (XLS ou HTML) -----------------------
 def ler_xls_em_memoria(xls_bytes: bytes) -> pd.DataFrame:
-    # precisa de: pip install xlrd
-    return pd.read_excel(BytesIO(xls_bytes), engine="xlrd")
+    # 1) tenta XLS binário
+    try:
+        return pd.read_excel(BytesIO(xls_bytes), engine="xlrd")
+    except Exception:
+        # 2) fallback: HTML disfarçado de XLS
+        html = xls_bytes.decode("latin1", errors="ignore")
+        dfs = pd.read_html(StringIO(html))
+        if not dfs:
+            raise RuntimeError("Não encontrei tabelas no HTML retornado.")
+        return dfs[0]
 
-
-# ----------------------- Colar na planilha-mãe -----------------------
-def colar_na_planilha_mae(df: pd.DataFrame):
+# ----------------------- Colar A:F na planilha-mãe -----------------------
+def colar_A_F_na_planilha_mae(df: pd.DataFrame):
     if not os.path.exists(PLANILHA_MAE_PATH):
         raise FileNotFoundError(f"Não achei a planilha-mãe em: {PLANILHA_MAE_PATH}")
 
@@ -210,21 +167,34 @@ def colar_na_planilha_mae(df: pd.DataFrame):
 
     ws = wb[ABA_DESTINO]
 
-    # limpa tudo da aba
-    if ws.max_row > 0:
-        ws.delete_rows(1, ws.max_row)
+    # pega só as 6 primeiras colunas (A-F). Se tiver menos, completa.
+    df6 = df.copy()
+    if df6.shape[1] < 6:
+        # adiciona colunas vazias até dar 6
+        for k in range(6 - df6.shape[1]):
+            df6[f"col_vazia_{k+1}"] = None
+    df6 = df6.iloc[:, :6]
 
-    # escreve cabeçalho
-    for col_idx, col in enumerate(df.columns, start=1):
-        ws.cell(row=1, column=col_idx, value=str(col))
+    # número de linhas a escrever (inclui header)
+    new_rows = len(df6) + 1  # +1 header
+    old_rows = ws.max_row if ws.max_row else 0
 
-    # escreve dados
-    for r_idx, row in enumerate(df.itertuples(index=False), start=2):
+    # 1) limpa A:F do que já existe (até o maior entre antigo e novo)
+    max_rows_to_clear = max(old_rows, new_rows)
+    for r in range(1, max_rows_to_clear + 1):
+        for c in range(1, 7):  # A=1 ... F=6
+            ws.cell(row=r, column=c).value = None
+
+    # 2) escreve header em A1:F1
+    for c, col_name in enumerate(df6.columns, start=1):
+        ws.cell(row=1, column=c, value=str(col_name))
+
+    # 3) escreve dados a partir da linha 2 (A2:F...)
+    for r_idx, row in enumerate(df6.itertuples(index=False), start=2):
         for c_idx, val in enumerate(row, start=1):
             ws.cell(row=r_idx, column=c_idx, value=val)
 
     wb.save(PLANILHA_MAE_PATH)
-
 
 # ----------------------- MAIN -----------------------
 if __name__ == "__main__":
@@ -234,10 +204,10 @@ if __name__ == "__main__":
     print("📥 Baixando Mercado Secundário em memória...")
     xls_bytes = baixar_mes_anterior_em_memoria()
 
-    print("📊 Lendo XLS em memória...")
+    print("📊 Lendo retorno em memória (XLS/HTML)...")
     df = ler_xls_em_memoria(xls_bytes)
 
-    print(f"📄 Colando na planilha-mãe ({PLANILHA_MAE_PATH}) na aba '{ABA_DESTINO}'...")
-    colar_na_planilha_mae(df)
+    print(f"📄 Colando A:F na planilha-mãe ({PLANILHA_MAE_PATH}) na aba '{ABA_DESTINO}'...")
+    colar_A_F_na_planilha_mae(df)
 
-    print("✅ Concluído: dados atualizados na planilha-mãe.")
+    print("✅ Concluído: colunas A-F atualizadas na aba 'python'.")
