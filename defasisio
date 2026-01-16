@@ -1,0 +1,160 @@
+import re
+import os
+import certifi
+import requests
+from datetime import date
+from urllib.parse import parse_qsl, urlencode
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
+URL = "https://www.debentures.com.br/exploreosnd/consultaadados/mercadosecundario/MercSecMes.aspx"
+
+# ================= CONFIG (AJUSTE AQUI) =================
+PLANILHA_MAE_PATH = r"/Users/henriquepiscopo/bradesco/MinhaPlanilhaMae.xlsm"  # <-- coloque o caminho aqui
+ABA_DESTINO = "python"  
+# ========================================================
+
+HEADERS = {
+    "User-Agent": "Mozilla/5.0",
+    "Accept": "*/*",
+    "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
+    "Connection": "close",
+    "Referer": "https://www.debentures.com.br/",
+}
+
+def build_session() -> requests.Session:
+    s = requests.Session()
+    s.trust_env = True
+    retry = Retry(
+        total=7,
+        backoff_factor=0.8,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["GET", "POST"],
+        raise_on_status=False,
+    )
+    s.mount("https://", HTTPAdapter(max_retries=retry))
+    return s
+
+def mes_ano_anterior(ref=None):
+    ref = ref or date.today()
+    if ref.month == 1:
+        return 12, ref.year - 1
+    return ref.month - 1, ref.year
+
+def parse_hidden(html: str) -> dict:
+    """
+    Pega __VIEWSTATE, __EVENTVALIDATION, __VIEWSTATEGENERATOR etc.
+    """
+    hidden = {}
+    for name in ["__VIEWSTATE", "__EVENTVALIDATION", "__VIEWSTATEGENERATOR"]:
+        m = re.search(rf'id="{re.escape(name)}"\s+value="([^"]*)"', html, flags=re.I)
+        if m:
+            hidden[name] = m.group(1)
+    return hidden
+
+def find_eventtargets(html: str) -> dict:
+    """
+    Descobre ids úteis na página:
+      - export: lnkex (já vimos no seu debug) :contentReference[oaicite:1]{index=1}
+      - anterior: algo com Mes + (Ant|Prev)
+      - próximo: algo com Mes + (Prox|Next)
+    """
+    ids = re.findall(r'id="(ctl00_ContentPlaceHolder1_[^"]+)"', html, flags=re.I)
+
+    # export geralmente é lnkex
+    export_id = None
+    for i in ids:
+        if i.lower().endswith("_lnkex"):
+            export_id = i
+            break
+
+    # tenta achar anterior e próximo
+    prev_id = None
+    next_id = None
+    for i in ids:
+        low = i.lower()
+        if "mes" in low and ("ant" in low or "prev" in low):
+            prev_id = i
+        if "mes" in low and ("prox" in low or "next" in low):
+            next_id = i
+
+    return {"export": export_id, "prev": prev_id, "next": next_id, "all": ids}
+
+def current_period_from_html(html: str) -> str:
+    """
+    A página mostra algo tipo '1/2026' ou '12/2025' no texto.
+    """
+    m = re.search(r"\b(\d{1,2})/(\d{4})\b", html)
+    if not m:
+        return ""
+    return f"{int(m.group(1))}/{m.group(2)}"
+
+def postback(s: requests.Session, eventtarget: str, hidden: dict) -> requests.Response:
+    data = {
+        "__EVENTTARGET": eventtarget.replace("_", "$"),  # ASP.NET usa $ no name
+        "__EVENTARGUMENT": "",
+        "__VIEWSTATE": hidden.get("__VIEWSTATE", ""),
+        "__VIEWSTATEGENERATOR": hidden.get("__VIEWSTATEGENERATOR", ""),
+        "__EVENTVALIDATION": hidden.get("__EVENTVALIDATION", ""),
+    }
+    r = s.post(URL, data=data, headers=HEADERS, timeout=(10, 180), verify=certifi.where())
+    r.raise_for_status()
+    return r
+
+def baixar_mes_anterior(out_dir="downloads"):
+    os.makedirs(out_dir, exist_ok=True)
+
+    target_m, target_y = mes_ano_anterior()
+    target_label = f"{target_m}/{target_y}"
+    out_path = os.path.join(out_dir, f"MercSecMes_{target_y}_{target_m:02d}.xls")
+
+    s = build_session()
+
+    # GET inicial
+    r0 = s.get(URL, headers=HEADERS, timeout=(10, 60), verify=certifi.where())
+    r0.raise_for_status()
+    html = r0.text
+
+    hidden = parse_hidden(html)
+    ids = find_eventtargets(html)
+
+    if not ids["export"]:
+        raise RuntimeError("Não achei o botão de export (lnkex) no HTML.")
+    if not ids["prev"]:
+        # se não achar, te mostro os candidatos pra você escolher 1 nome
+        candidates = [i for i in ids["all"] if "mes" in i.lower()]
+        raise RuntimeError(f"Não achei controle de mês anterior no HTML. Candidatos: {candidates[:30]}")
+
+    # Navega até o mês alvo (normalmente 1 clique só, mas deixo genérico)
+    cur = current_period_from_html(html)
+    print("Período inicial:", cur, "| alvo:", target_label)
+
+    for _ in range(36):
+        if cur == target_label:
+            break
+        r = postback(s, ids["prev"], hidden)
+        html = r.text
+        hidden = parse_hidden(html)
+        cur = current_period_from_html(html)
+        print("Agora:", cur)
+
+    if cur != target_label:
+        raise RuntimeError(f"Não consegui chegar em {target_label}. Parei em {cur}.")
+
+    # Exporta
+    r_export = postback(s, ids["export"], hidden)
+
+    cdisp = (r_export.headers.get("Content-Disposition") or "").lower()
+    if "attachment" not in cdisp:
+        with open(os.path.join(out_dir, "debug_export.html"), "w", encoding="utf-8") as f:
+            f.write(r_export.text)
+        raise RuntimeError("Export não retornou attachment. Salvei debug_export.html")
+
+    with open(out_path, "wb") as f:
+        f.write(r_export.content)
+
+    return out_path
+
+if __name__ == "__main__":
+    path = baixar_mes_anterior()
+    print("✅ Baixado:", os.path.abspath(path))
