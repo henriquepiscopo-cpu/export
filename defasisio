@@ -111,12 +111,32 @@ def baixar_mes_anterior_em_memoria() -> bytes:
 
     return r.content
 
+# ================= Limpeza pós-paste =================
+def limpar_texto_para_numero_excel(ws, cell_address):
+    """
+    Limpa a célula no Excel:
+    - remove tudo que não for dígito
+    - remove espaços
+    - converte para número
+    Ex: "(***) 1165   " -> 1165
+    """
+    val = ws.Range(cell_address).Value
+    if val is None:
+        return
+
+    s = str(val)
+    s = re.sub(r"\D", "", s)
+
+    if s != "":
+        ws.Range(cell_address).Value = int(s)
+    else:
+        ws.Range(cell_address).Value = None
+
 # ================= Excel COM Copy/Paste =================
 def colar_via_excel_copy_paste(xls_bytes: bytes):
     """
-    Faz exatamente o que você faz manualmente:
-      abre o arquivo do download no Excel -> copia A:F -> cola em A1 na aba ABA_DESTINO
-    Isso evita 100% os bugs de separador/locale.
+    Abre o arquivo do download no Excel -> copia A:F -> cola em A1 na aba ABA_DESTINO.
+    Depois faz limpeza específica (B3).
     """
     if not os.path.exists(PLANILHA_MAE_PATH):
         raise FileNotFoundError(f"Planilha não encontrada: {PLANILHA_MAE_PATH}")
@@ -126,11 +146,9 @@ def colar_via_excel_copy_paste(xls_bytes: bytes):
     except Exception as e:
         raise RuntimeError("Faltou pywin32. Instale com: pip install pywin32") from e
 
-    # Constantes numéricas (evita erro de constants.xlUp)
     XL_UP = -4162
     XL_PASTE_VALUES_AND_NUMBER_FORMATS = 12
 
-    # salva o download em temp .xls
     tmp_path = os.path.join(tempfile.gettempdir(), "debentures_mercsec_mes_tmp.xls")
     with open(tmp_path, "wb") as f:
         f.write(xls_bytes)
@@ -154,26 +172,24 @@ def colar_via_excel_copy_paste(xls_bytes: bytes):
         except Exception:
             raise RuntimeError(f"Aba '{ABA_DESTINO}' não existe na planilha mãe.")
 
-        # ultima linha usada pela coluna A (xlUp)
         last_row = ws_src.Cells(ws_src.Rows.Count, 1).End(XL_UP).Row
         if last_row < 1:
             raise RuntimeError("Fonte parece vazia (não achei última linha).")
 
-        # range A1:F(last_row)
         rng_src = ws_src.Range(ws_src.Cells(1, 1), ws_src.Cells(last_row, 6))
 
-        # limpa destino
         ws_dst.Range("A:F").ClearContents
 
-        # copia/cola como no Ctrl+C / Ctrl+V
         rng_src.Copy()
         ws_dst.Range("A1").PasteSpecial(Paste=XL_PASTE_VALUES_AND_NUMBER_FORMATS)
 
-        # limpa clipboard
         xl.CutCopyMode = False
 
+        # ✅ limpeza específica pós-paste
+        limpar_texto_para_numero_excel(ws_dst, "B3")
+
         wb_dst.Save()
-        print(f"✅ Colado via Excel. Linhas: {last_row} | Colunas: A-F")
+        print(f"✅ Colado via Excel. Linhas: {last_row} | Colunas: A-F | B3 limpo")
 
     finally:
         try:
