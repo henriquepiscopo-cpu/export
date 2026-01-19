@@ -138,14 +138,33 @@ def ler_xls_em_memoria(xls_bytes: bytes) -> pd.DataFrame:
             raise RuntimeError("Nenhuma tabela encontrada no HTML.")
         return dfs[0]
 
-# ================= Normalização =================
+# ================= Normalização (SEM zero extra) =================
+def _num_to_int_if_possible(x):
+    # evita o caso 1566.0 virar "1566.0" e depois "15660"
+    if isinstance(x, bool):
+        return x
+    if isinstance(x, int):
+        return x
+    if isinstance(x, float):
+        if pd.isna(x):
+            return None
+        if x.is_integer():
+            return int(x)
+        # se vier float com decimais reais, aqui você escolhe:
+        # truncar:
+        return int(x)
+    return None  # sinaliza "não-numérico puro"
+
 def somente_digitos(x):
     """
     Para colunas C e E: remove '.' e ',' e mantém só dígitos (e sinal).
-    (Não interpreta decimal.)
     """
     if x is None:
         return None
+
+    n = _num_to_int_if_possible(x)
+    if isinstance(n, int):
+        return n
 
     s = str(x).strip().replace("\xa0", "").replace(" ", "")
     if s == "":
@@ -171,12 +190,18 @@ def somente_digitos(x):
 def normalizar_coluna_D(x):
     """
     Coluna D:
-    - '.' é milhar (remove)
-    - ',' é decimal (corta parte decimal), EXCETO quando parecer milhar (ex: '1,500')
+    - Se já veio como número (ex: 1566.0), converte direto pra int (1566) e pronto.
+    - Se veio como texto:
+        '.' = milhar (remove)
+        ',' = decimal (corta parte decimal), EXCETO quando parecer milhar (ex: '1,500')
     Retorna inteiro.
     """
     if x is None:
         return None
+
+    n = _num_to_int_if_possible(x)
+    if isinstance(n, int):
+        return n
 
     s = str(x).strip().replace("\xa0", "").replace(" ", "")
     if s == "":
@@ -190,7 +215,6 @@ def normalizar_coluna_D(x):
         neg = True
         s = s[1:]
 
-    # mantém só dígitos e separadores
     s = re.sub(r"[^0-9\.,]", "", s)
     if s == "":
         return None
@@ -199,11 +223,11 @@ def normalizar_coluna_D(x):
     s_no_dot = s.replace(".", "")
 
     if "," in s_no_dot:
-        # se padrão milhar (,\d{3} no fim) => remove vírgula
+        # milhar por vírgula (ex: 1,500)
         if re.search(r",\d{3}$", s_no_dot):
             s_int = s_no_dot.replace(",", "")
         else:
-            # decimal => pega parte inteira
+            # decimal: pega parte inteira
             s_int = s_no_dot.split(",", 1)[0]
     else:
         s_int = s_no_dot
@@ -236,12 +260,11 @@ def colar_A_F_na_planilha_mae(df: pd.DataFrame):
             df6[f"col_vazia_{i+1}"] = None
     df6 = df6.iloc[:, :6]
 
-    # Ajuste por coluna (A-F):
-    # C (idx 2) e E (idx 4): remove separadores, mantém dígitos
+    # C (idx 2) e E (idx 4): só dígitos
     df6[df6.columns[2]] = df6[df6.columns[2]].map(somente_digitos)
     df6[df6.columns[4]] = df6[df6.columns[4]].map(somente_digitos)
 
-    # D (idx 3): '.' milhar, ',' decimal (corta), exceto quando ',###' (milhar)
+    # D (idx 3): ponto milhar, vírgula decimal (corta) com proteção p/ float 1566.0
     df6[df6.columns[3]] = df6[df6.columns[3]].map(normalizar_coluna_D)
 
     # limpa A:F antigas
@@ -272,12 +295,8 @@ if __name__ == "__main__":
     print("📊 Lendo dados...")
     df = ler_xls_em_memoria(xls_bytes)
 
-    print("📄 Colando colunas A–F (D com '.' milhar e ',' decimal)...")
+    print("📄 Colando colunas A–F (D corrigida sem zero extra de float)...")
     colar_A_F_na_planilha_mae(df)
 
     print("✅ Concluído com sucesso.")
 
-    print("📄 Colando colunas A–F (D divide só se terminar com ',0')...")
-    colar_A_F_na_planilha_mae(df)
-
-    print("✅ Concluído com sucesso.")
