@@ -80,16 +80,21 @@ def baixar_mes_anterior_em_memoria() -> bytes:
     alvo = f"{m}/{y}"
     s = build_session()
 
-    r = s.get(URL, headers=HEADERS)
+    r = s.get(URL, headers=HEADERS, timeout=(10, 60), verify=certifi.where())
     r.raise_for_status()
 
     html = r.text
     hidden = parse_hidden(html)
     ids = find_eventtargets(html)
 
+    if not ids["export"] or not ids["prev"]:
+        raise RuntimeError("Não achei controles de navegação/export.")
+
     cur = current_period_from_html(html)
     if not cur:
-        raise RuntimeError("Não detectei período inicial")
+        raise RuntimeError("Não detectei período inicial.")
+
+    print("Período inicial:", cur, "| alvo:", alvo)
 
     for _ in range(36):
         if cur == alvo:
@@ -100,37 +105,45 @@ def baixar_mes_anterior_em_memoria() -> bytes:
         cur = current_period_from_html(html)
 
     if cur != alvo:
-        raise RuntimeError(f"Não cheguei em {alvo}")
+        raise RuntimeError(f"Não consegui chegar em {alvo} (parei em {cur}).")
 
     r = postback(s, ids["export"], hidden)
     if "attachment" not in (r.headers.get("Content-Disposition") or "").lower():
-        raise RuntimeError("Export não retornou arquivo")
+        raise RuntimeError("Export não retornou arquivo.")
 
     return r.content
 
-# ================= Leitura =================
+# ================= Leitura (FORÇANDO TEXTO) =================
 def ler_xls_em_memoria(xls_bytes: bytes) -> pd.DataFrame:
+    """
+    CRÍTICO:
+    Lê tudo como TEXTO para não perder casos como '140.000' virando 140.0.
+    """
     try:
-        return pd.read_excel(BytesIO(xls_bytes))
+        return pd.read_excel(
+            BytesIO(xls_bytes),
+            dtype=str,
+            keep_default_na=False
+        )
     except Exception:
         html = xls_bytes.decode("latin1", errors="ignore")
-        return pd.read_html(StringIO(html))[0]
+        dfs = pd.read_html(StringIO(html), keep_default_na=False)
+        if not dfs:
+            raise RuntimeError("Nenhuma tabela encontrada no HTML.")
+        return dfs[0].astype(str)
 
-# ================= NORMALIZAÇÃO =================
-def normalizar_coluna_D(x):
+# ================= Normalização =================
+def somente_digitos(x):
     """
-    Converte qualquer formato numérico comum para inteiro correto:
-    1.566 / 1,566 / 1566,0 / 1566.0 / 1566,75 → 1566
+    Para C e E:
+    remove tudo que não é dígito (mantém sinal via parênteses/menos).
     """
-    if x is None or (isinstance(x, float) and pd.isna(x)):
+    if x is None:
         return None
 
-    # número puro
-    if isinstance(x, (int, float)):
-        return int(x)
-
-    s = str(x).strip().replace(" ", "").replace("\xa0", "")
-    s = re.sub(r"[^\d\.,\-()]", "", s)
+    s = str(x).strip().replace("\xa0", "").replace(" ", "")
+    if s == "":
+        return None
 
     neg = False
     if s.startswith("(") and s.endswith(")"):
@@ -140,21 +153,49 @@ def normalizar_coluna_D(x):
         neg = True
         s = s[1:]
 
-    # tem ponto e vírgula → ponto milhar, vírgula decimal
-    if "." in s and "," in s:
-        s = s.replace(".", "")
-        s = s.split(",", 1)[0]
+    s = re.sub(r"\D", "", s)
+    if s == "":
+        return None
 
-    # só vírgula
+    v = int(s)
+    return -v if neg else v
+
+def normalizar_coluna_D(x):
+    """
+    Coluna D (inteiro correto):
+    - '.' é milhar => remove
+    - ',' é decimal => corta parte decimal
+    - mas se vírgula estiver em padrão milhar (1,566 / 12,345 / 1,234,567) => remove vírgulas
+    """
+    if x is None:
+        return None
+
+    s = str(x).strip().replace("\xa0", "").replace(" ", "")
+    if s == "":
+        return None
+
+    neg = False
+    if s.startswith("(") and s.endswith(")"):
+        neg = True
+        s = s[1:-1]
+    if s.startswith("-"):
+        neg = True
+        s = s[1:]
+
+    # mantém só dígitos e separadores
+    s = re.sub(r"[^0-9\.,]", "", s)
+    if s == "":
+        return None
+
+    # '.' sempre milhar
+    s = s.replace(".", "")
+
+    # vírgula milhar: 1,566 ou 1,234,567
+    if re.fullmatch(r"\d{1,3}(,\d{3})+", s):
+        s = s.replace(",", "")
+    # senão, trata como decimal e corta
     elif "," in s:
-        if re.fullmatch(r"\d{1,3}(,\d{3})+", s):
-            s = s.replace(",", "")
-        else:
-            s = s.split(",", 1)[0]
-
-    # só ponto
-    elif "." in s:
-        s = s.replace(".", "")
+        s = s.split(",", 1)[0]
 
     if s == "":
         return None
@@ -162,45 +203,60 @@ def normalizar_coluna_D(x):
     v = int(s)
     return -v if neg else v
 
-def somente_digitos(x):
-    if x is None or (isinstance(x, float) and pd.isna(x)):
-        return None
-    if isinstance(x, (int, float)):
-        return int(x)
-    s = re.sub(r"\D", "", str(x))
-    return int(s) if s else None
-
-# ================= COLAR NA PLANILHA =================
+# ================= Colar A:F =================
 def colar_A_F_na_planilha_mae(df: pd.DataFrame):
-    wb = load_workbook(PLANILHA_MAE_PATH, keep_vba=True)
+    if not os.path.exists(PLANILHA_MAE_PATH):
+        raise FileNotFoundError(f"Planilha não encontrada: {PLANILHA_MAE_PATH}")
+
+    wb = load_workbook(PLANILHA_MAE_PATH, keep_vba=PLANILHA_MAE_PATH.lower().endswith(".xlsm"))
+    if ABA_DESTINO not in wb.sheetnames:
+        raise RuntimeError(f"Aba '{ABA_DESTINO}' não existe.")
     ws = wb[ABA_DESTINO]
 
-    df6 = df.iloc[:, :6].copy()
+    # garante 6 colunas (A-F)
+    df6 = df.copy()
+    if df6.shape[1] < 6:
+        for i in range(6 - df6.shape[1]):
+            df6[f"col_vazia_{i+1}"] = ""
+    df6 = df6.iloc[:, :6].copy()
 
-    # C, D, E
+    # C (idx 2), D (idx 3), E (idx 4)
     df6.iloc[:, 2] = df6.iloc[:, 2].map(somente_digitos)
     df6.iloc[:, 3] = df6.iloc[:, 3].map(normalizar_coluna_D)
     df6.iloc[:, 4] = df6.iloc[:, 4].map(somente_digitos)
 
-    ws.delete_rows(1, ws.max_row)
+    # limpa A:F antigas
+    max_rows = max(ws.max_row or 0, len(df6) + 1)
+    for r in range(1, max_rows + 1):
+        for c in range(1, 7):
+            ws.cell(row=r, column=c).value = None
 
-    ws.append(list(df6.columns))
-    for row in df6.itertuples(index=False):
-        ws.append(list(row))
+    # header
+    for c, name in enumerate(df6.columns, start=1):
+        ws.cell(row=1, column=c, value=str(name))
+
+    # dados
+    for r_idx, row in enumerate(df6.itertuples(index=False), start=2):
+        for c_idx, val in enumerate(row, start=1):
+            ws.cell(row=r_idx, column=c_idx, value=val)
 
     wb.save(PLANILHA_MAE_PATH)
 
 # ================= MAIN =================
 if __name__ == "__main__":
-    print("📥 Baixando mês anterior...")
+    m, y = mes_ano_anterior()
+    print(f"✔ Baixando mês anterior: {m:02d}/{y}")
+
+    print("📥 Download em memória...")
     xls_bytes = baixar_mes_anterior_em_memoria()
 
-    print("📊 Lendo dados...")
+    print("📊 Lendo dados (forçando texto)...")
     df = ler_xls_em_memoria(xls_bytes)
 
-    print("📄 Colando na planilha mãe...")
+    print("📄 Colando colunas A–F (D preserva 140.000 -> 140000)...")
     colar_A_F_na_planilha_mae(df)
 
-    print("✅ Finalizado com sucesso.")
+    print("✅ Concluído com sucesso.")
+
 
 
