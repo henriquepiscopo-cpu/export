@@ -13,7 +13,7 @@ Sub Atualizar_Consolidado_Trimestral()
     
     Application.ScreenUpdating = False
     
-    ' 1) Abrir a coluna E deslocando para a direita (inserir célula na coluna E)
+    ' 1) Abrir a coluna E deslocando para a direita
     '    Linhas: 8 9 10 11 12 15 16
     linhas = Array(8, 9, 10, 11, 12, 15, 16)
     For i = LBound(linhas) To UBound(linhas)
@@ -24,7 +24,7 @@ Sub Atualizar_Consolidado_Trimestral()
     ' 2) Colagens / mapeamento
     ' ===============================
     
-    ' python!J3 -> consolidado!E15 (número com 1 casa decimal)
+    ' python!J3 -> consolidado!E15 (1 casa decimal)
     If IsNumeric(wsPy.Range("J3").Value) And wsPy.Range("J3").Value <> "" Then
         wsCon.Range("E15").Value = CDbl(wsPy.Range("J3").Value)
         wsCon.Range("E15").NumberFormat = "0.0"
@@ -32,7 +32,7 @@ Sub Atualizar_Consolidado_Trimestral()
         wsCon.Range("E15").Value = wsPy.Range("J3").Value
     End If
     
-    ' python!J4 -> consolidado!E16 (número com 1 casa decimal)
+    ' python!J4 -> consolidado!E16 (1 casa decimal)
     If IsNumeric(wsPy.Range("J4").Value) And wsPy.Range("J4").Value <> "" Then
         wsCon.Range("E16").Value = CDbl(wsPy.Range("J4").Value)
         wsCon.Range("E16").NumberFormat = "0.0"
@@ -40,7 +40,7 @@ Sub Atualizar_Consolidado_Trimestral()
         wsCon.Range("E16").Value = wsPy.Range("J4").Value
     End If
     
-    ' python!D3 -> consolidado!E9 (dividido por 1000, inteiro)
+    ' python!D3 -> consolidado!E9 (÷ 1.000)
     If IsNumeric(wsPy.Range("D3").Value) And wsPy.Range("D3").Value <> "" Then
         wsCon.Range("E9").Value = CDbl(wsPy.Range("D3").Value) / 1000
         wsCon.Range("E9").NumberFormat = "0"
@@ -48,7 +48,7 @@ Sub Atualizar_Consolidado_Trimestral()
         wsCon.Range("E9").Value = wsPy.Range("D3").Value
     End If
     
-    ' python!E3 -> consolidado!E10 (dividido por 1.000.000.000, inteiro)
+    ' python!E3 -> consolidado!E10 (÷ 1.000.000.000)
     If IsNumeric(wsPy.Range("E3").Value) And wsPy.Range("E3").Value <> "" Then
         wsCon.Range("E10").Value = CDbl(wsPy.Range("E3").Value) / 1000000000#
         wsCon.Range("E10").NumberFormat = "0"
@@ -56,8 +56,17 @@ Sub Atualizar_Consolidado_Trimestral()
         wsCon.Range("E10").Value = wsPy.Range("E3").Value
     End If
     
+    ' ✅ NOVO: python!B3 -> consolidado!E11 (número simples)
+    If IsNumeric(wsPy.Range("B3").Value) And wsPy.Range("B3").Value <> "" Then
+        wsCon.Range("E11").Value = CDbl(wsPy.Range("B3").Value)
+        wsCon.Range("E11").NumberFormat = "0"
+    Else
+        wsCon.Range("E11").Value = wsPy.Range("B3").Value
+    End If
+    
     Application.ScreenUpdating = True
 
 End Sub
+
 
 
