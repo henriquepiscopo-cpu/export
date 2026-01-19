@@ -3,7 +3,6 @@ import re
 import certifi
 import requests
 import pandas as pd
-import numpy as np
 from io import BytesIO, StringIO
 from datetime import date
 from requests.adapters import HTTPAdapter
@@ -143,13 +142,15 @@ def ler_xls_em_memoria(xls_bytes: bytes) -> pd.DataFrame:
 
 # ================= Normalização forte C/D/E =================
 def somente_digitos_int(x):
+    """
+    Regra FORTE:
+    - remove ponto e vírgula
+    - ignora qualquer interpretação decimal
+    - mantém todos os dígitos (na ordem)
+    Ex: '1,500' -> 1500 ; '1.500,00' -> 150000 ; '1,5' -> 15
+    """
     if x is None:
         return None
-    if isinstance(x, (int, float)):
-        try:
-            return int(round(float(x)))
-        except:
-            return None
 
     s = str(x).strip()
     if s == "":
@@ -163,11 +164,16 @@ def somente_digitos_int(x):
         neg = True
         s = s[1:]
 
-    digits = re.sub(r"\D", "", s)
-    if digits == "":
+    # remove apenas ponto e virgula
+    s = s.replace(".", "").replace(",", "")
+
+    # remove qualquer outra coisa nao-digit
+    s = re.sub(r"\D", "", s)
+
+    if s == "":
         return None
 
-    val = int(digits)
+    val = int(s)
     return -val if neg else val
 
 # ================= Colar A:F =================
@@ -185,14 +191,14 @@ def colar_A_F_na_planilha_mae(df: pd.DataFrame):
 
     ws = wb[ABA_DESTINO]
 
-    # garante 6 colunas
+    # garante 6 colunas (A-F)
     df6 = df.copy()
     if df6.shape[1] < 6:
         for i in range(6 - df6.shape[1]):
             df6[f"col_vazia_{i+1}"] = None
     df6 = df6.iloc[:, :6]
 
-    # 🔥 regra definitiva: C, D, E só dígitos
+    # 🔥 regra definitiva: C, D, E só remove pontos/virgulas (sem arredondar)
     for idx in [2, 3, 4]:  # C,D,E
         col = df6.columns[idx]
         df6[col] = df6[col].map(somente_digitos_int)
@@ -225,8 +231,9 @@ if __name__ == "__main__":
     print("📊 Lendo dados...")
     df = ler_xls_em_memoria(xls_bytes)
 
-    print("📄 Colando colunas A–F (C/D/E normalizadas)...")
+    print("📄 Colando colunas A–F (C/D/E sem pontos/virgulas)...")
     colar_A_F_na_planilha_mae(df)
 
     print("✅ Concluído com sucesso.")
+
 
