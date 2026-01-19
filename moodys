@@ -1,0 +1,192 @@
+import os
+import glob
+import re
+import unicodedata
+from openpyxl import load_workbook, Workbook
+
+# ================= CONFIG (AJUSTE AQUI) =================
+SOURCE_PATH = ""  # ex: r"C:\Users\...\Downloads\MOODYS_LOCAL_BRAZIL_20260119_000238.xlsx"
+SHEET_NAME = "ML Brazil"
+OUT_PATH = os.path.join(os.path.expanduser("~"), "Downloads", "MOODYS_LOCAL_BRAZIL_tratado.xlsx")
+FILENAME_PREFIX = "MOODYS_LOCAL_BRAZIL_"
+# ========================================================
+
+
+def find_latest_in_downloads(prefix: str) -> str:
+    downloads = os.path.join(os.path.expanduser("~"), "Downloads")
+    pattern = os.path.join(downloads, f"{prefix}*.xlsx")
+    hits = sorted(glob.glob(pattern), key=os.path.getmtime, reverse=True)
+    if not hits:
+        raise FileNotFoundError(f"Não achei arquivo em {downloads} com padrão: {prefix}*.xlsx")
+    return hits[0]
+
+
+def norm_text(s: str) -> str:
+    if s is None:
+        return ""
+    s = str(s).strip().lower()
+    s = unicodedata.normalize("NFKD", s)
+    s = "".join(ch for ch in s if not unicodedata.combining(ch))
+    s = " ".join(s.split())
+    return s
+
+
+def limpar_coluna_c_texto(s: str) -> str:
+    if s is None:
+        return ""
+    s = str(s)
+    s = re.sub(r"\s*\([^)]*\)", "", s)          # remove ( ... )
+    s = re.split(r"\s-\s", s, maxsplit=1)[0]    # remove " - ..." à direita
+    s = " ".join(s.strip().split())
+    return s
+
+
+def fmt_ordinal_pt(num: str, suf: str) -> str:
+    n = num.strip()
+    s = (suf or "").strip().lower()
+    if s in ("a", "ª"):
+        return f"{n}ª"
+    if s in ("o", "º"):
+        return f"{n}º"
+    return n
+
+
+def ajustar_coluna_e(s: str) -> str:
+    """
+    Regras coluna E:
+    1) Garantir ordinal na emissão no começo: "4 Emissão..." -> "4ª Emissão..."
+    2) Garantir ordinal na série: "- 1a Série" / "– 1a Série" / "- 1ª Série" -> "– 1ª Série"
+    3) Se terminar exatamente com "Emissão de Debêntures", acrescentar " – Série Única"
+    """
+    if s is None:
+        return ""
+    s = " ".join(str(s).strip().split())
+    if s == "":
+        return ""
+
+    # padroniza hífen com espaços para EN DASH
+    s = re.sub(r"\s-\s", " – ", s)
+
+    # 1) Corrigir ordinal no começo: "4 Emissão" / "4a Emissão" / "4ª Emissão"
+    s = re.sub(
+        r"^(\d+)\s*([ªaºo])?\s+(Emiss[aã]o\b)",
+        lambda m: f"{m.group(1)}ª {m.group(3)}",
+        s,
+        flags=re.I
+    )
+
+    # 2) Corrigir ordinal na série
+    def repl_serie(m):
+        num = m.group(1)
+        suf = m.group(2) or ""
+        if suf.strip() == "":
+            return f" – {num}ª Série"
+        return f" – {fmt_ordinal_pt(num, suf)} Série"
+
+    s = re.sub(
+        r"\s[–-]\s*(\d+)\s*([ªaºo])?\s*S[eé]rie\b",
+        repl_serie,
+        s,
+        flags=re.I
+    )
+
+    # 3) Se terminar com "Emissão de Debêntures", acrescenta " – Série Única"
+    s_norm = norm_text(s)
+    if s_norm.endswith("emissao de debentures") and ("serie unica" not in s_norm):
+        s = s + " – Série Única"
+
+    return s
+
+
+def autofit_columns(ws):
+    # AutoFit simples via cálculo de largura por conteúdo
+    for col_cells in ws.columns:
+        max_len = 0
+        col_letter = col_cells[0].column_letter
+        for cell in col_cells:
+            try:
+                if cell.value is not None and str(cell.value) != "":
+                    max_len = max(max_len, len(str(cell.value)))
+            except Exception:
+                pass
+        ws.column_dimensions[col_letter].width = max_len + 2
+
+
+def main():
+    src_path = SOURCE_PATH.strip() or find_latest_in_downloads(FILENAME_PREFIX)
+    print("📄 Fonte:", src_path)
+
+    wb_src = load_workbook(src_path, data_only=False)
+    if SHEET_NAME not in wb_src.sheetnames:
+        raise RuntimeError(f"Aba '{SHEET_NAME}' não existe. Abas: {wb_src.sheetnames}")
+
+    ws_src = wb_src[SHEET_NAME]
+    max_row = ws_src.max_row
+    max_col = ws_src.max_column
+    if max_row < 4:
+        raise RuntimeError("A planilha tem menos de 4 linhas; não dá para copiar a partir da linha 4.")
+
+    wb_out = Workbook()
+    ws_out = wb_out.active
+    ws_out.title = SHEET_NAME
+
+    # 1) Copiar da linha 4 pra baixo, linha 4 vira linha 1
+    out_r = 1
+    for r in range(4, max_row + 1):
+        for c in range(1, max_col + 1):
+            ws_out.cell(row=out_r, column=c).value = ws_src.cell(row=r, column=c).value
+        out_r += 1
+
+    # 2) Deslocar uma coluna para a direita (insere nova coluna A)
+    ws_out.insert_cols(1)
+
+    # 3) A2 = concat (nova C com nova E) COM ESPAÇO + puxar para baixo
+    ws_out["A2"].value = '=C2&" "&E2'
+    last = ws_out.max_row
+    for r in range(3, last + 1):
+        ws_out.cell(row=r, column=1).value = f'=C{r}&" "&E{r}'
+
+    # 4) FILTROS / EXCLUSÕES (coluna D e E)
+    keep_d = norm_text("Rating de Dívida")
+    target_sub = "debenture"
+
+    for r in range(ws_out.max_row, 1, -1):
+        d_val = norm_text(ws_out.cell(row=r, column=4).value)  # D
+        e_val = norm_text(ws_out.cell(row=r, column=5).value)  # E
+
+        if d_val != keep_d:
+            ws_out.delete_rows(r, 1)
+            continue
+
+        if r >= 2 and (target_sub not in e_val):
+            ws_out.delete_rows(r, 1)
+            continue
+
+    # 5) LIMPAR COLUNA C (texto), exceto linhas 250-252 (na planilha final)
+    excecoes = {250, 251, 252}
+    last = ws_out.max_row
+    for r in range(1, last + 1):
+        if r in excecoes:
+            continue
+        val = ws_out.cell(row=r, column=3).value  # C
+        if val is None or str(val).strip() == "":
+            continue
+        ws_out.cell(row=r, column=3).value = limpar_coluna_c_texto(val)
+
+    # 6) AJUSTAR COLUNA E (emissão + série + série única)
+    last = ws_out.max_row
+    for r in range(1, last + 1):
+        val = ws_out.cell(row=r, column=5).value  # E
+        if val is None or str(val).strip() == "":
+            continue
+        ws_out.cell(row=r, column=5).value = ajustar_coluna_e(val)
+
+    # 7) AutoFit column widths na planilha toda
+    autofit_columns(ws_out)
+
+    wb_out.save(OUT_PATH)
+    print("✅ Salvo:", OUT_PATH)
+
+
+if __name__ == "__main__":
+    main()
