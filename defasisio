@@ -142,7 +142,6 @@ def ler_xls_em_memoria(xls_bytes: bytes) -> pd.DataFrame:
 
 # ================= Normalização =================
 def somente_digitos(x):
-    """Remove . e , e mantém só dígitos (e sinal)."""
     if x is None:
         return None
 
@@ -167,11 +166,11 @@ def somente_digitos(x):
     val = int(s)
     return -val if neg else val
 
-def digitos_e_div10_se_decimal_1(x):
+
+def digitos_e_div10_se_termina_com_virgula_zero(x):
     """
-    Coluna D: decide linha a linha.
-    - Se tiver padrão ',<1 dígito>' no original (ex: '1566,0') => divide por 10
-    - Senão => não divide
+    COLUNA D:
+    Divide por 10 SOMENTE se o valor original terminar com ',0'
     """
     if x is None:
         return None
@@ -181,8 +180,7 @@ def digitos_e_div10_se_decimal_1(x):
     if v is None:
         return None
 
-    # detecta decimal com 1 casa: ... ,0  / ,3 / etc
-    if re.search(r",\d$", s0):
+    if re.search(r",0$", s0):
         return v // 10
 
     return v
@@ -209,13 +207,15 @@ def colar_A_F_na_planilha_mae(df: pd.DataFrame):
             df6[f"col_vazia_{i+1}"] = None
     df6 = df6.iloc[:, :6]
 
-    # C (idx 2): remove separadores
+    # C
     df6[df6.columns[2]] = df6[df6.columns[2]].map(somente_digitos)
 
-    # D (idx 3): regra inteligente (divide só quando for ',1 digito' no original)
-    df6[df6.columns[3]] = df6[df6.columns[3]].map(digitos_e_div10_se_decimal_1)
+    # D (REGRA FINAL)
+    df6[df6.columns[3]] = df6[df6.columns[3]].map(
+        digitos_e_div10_se_termina_com_virgula_zero
+    )
 
-    # E (idx 4): remove separadores
+    # E
     df6[df6.columns[4]] = df6[df6.columns[4]].map(somente_digitos)
 
     # limpa A:F antigas
@@ -246,7 +246,7 @@ if __name__ == "__main__":
     print("📊 Lendo dados...")
     df = ler_xls_em_memoria(xls_bytes)
 
-    print("📄 Colando colunas A–F (D com regra inteligente)...")
+    print("📄 Colando colunas A–F (D divide só se terminar com ',0')...")
     colar_A_F_na_planilha_mae(df)
 
     print("✅ Concluído com sucesso.")
