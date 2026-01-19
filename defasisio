@@ -1,13 +1,11 @@
 import os
 import re
 import certifi
+import tempfile
 import requests
-import pandas as pd
-from io import BytesIO, StringIO
 from datetime import date
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-from openpyxl import load_workbook
 
 # ================= CONFIG =================
 PLANILHA_MAE_PATH = r"C:\Users\i467182\Documents\Code\Projetim\MinhaPlanilhaMae.xlsm"
@@ -113,134 +111,90 @@ def baixar_mes_anterior_em_memoria() -> bytes:
 
     return r.content
 
-# ================= Leitura (FORÇANDO TEXTO) =================
-def ler_xls_em_memoria(xls_bytes: bytes) -> pd.DataFrame:
-    """
-    CRÍTICO:
-    Lê tudo como TEXTO para não perder casos como '140.000' virando 140.0.
-    """
-    try:
-        return pd.read_excel(
-            BytesIO(xls_bytes),
-            dtype=str,
-            keep_default_na=False
-        )
-    except Exception:
-        html = xls_bytes.decode("latin1", errors="ignore")
-        dfs = pd.read_html(StringIO(html), keep_default_na=False)
-        if not dfs:
-            raise RuntimeError("Nenhuma tabela encontrada no HTML.")
-        return dfs[0].astype(str)
-
-# ================= Normalização =================
-def somente_digitos(x):
-    """
-    Para C e E:
-    remove tudo que não é dígito (mantém sinal via parênteses/menos).
-    """
-    if x is None:
-        return None
-
-    s = str(x).strip().replace("\xa0", "").replace(" ", "")
-    if s == "":
-        return None
-
-    neg = False
-    if s.startswith("(") and s.endswith(")"):
-        neg = True
-        s = s[1:-1]
-    if s.startswith("-"):
-        neg = True
-        s = s[1:]
-
-    s = re.sub(r"\D", "", s)
-    if s == "":
-        return None
-
-    v = int(s)
-    return -v if neg else v
-
-def normalizar_coluna_D(x):
-    """
-    Coluna D (inteiro correto):
-    - '.' é milhar => remove
-    - ',' é decimal => corta parte decimal
-    - mas se vírgula estiver em padrão milhar (1,566 / 12,345 / 1,234,567) => remove vírgulas
-    """
-    if x is None:
-        return None
-
-    s = str(x).strip().replace("\xa0", "").replace(" ", "")
-    if s == "":
-        return None
-
-    neg = False
-    if s.startswith("(") and s.endswith(")"):
-        neg = True
-        s = s[1:-1]
-    if s.startswith("-"):
-        neg = True
-        s = s[1:]
-
-    # mantém só dígitos e separadores
-    s = re.sub(r"[^0-9\.,]", "", s)
-    if s == "":
-        return None
-
-    # '.' sempre milhar
-    s = s.replace(".", "")
-
-    # vírgula milhar: 1,566 ou 1,234,567
-    if re.fullmatch(r"\d{1,3}(,\d{3})+", s):
-        s = s.replace(",", "")
-    # senão, trata como decimal e corta
-    elif "," in s:
-        s = s.split(",", 1)[0]
-
-    if s == "":
-        return None
-
-    v = int(s)
-    return -v if neg else v
-
-# ================= Colar A:F =================
-def colar_A_F_na_planilha_mae(df: pd.DataFrame):
+# ================= Excel COM Copy/Paste (igual manual) =================
+def colar_via_excel_copy_paste(xls_bytes: bytes):
     if not os.path.exists(PLANILHA_MAE_PATH):
         raise FileNotFoundError(f"Planilha não encontrada: {PLANILHA_MAE_PATH}")
 
-    wb = load_workbook(PLANILHA_MAE_PATH, keep_vba=PLANILHA_MAE_PATH.lower().endswith(".xlsm"))
-    if ABA_DESTINO not in wb.sheetnames:
-        raise RuntimeError(f"Aba '{ABA_DESTINO}' não existe.")
-    ws = wb[ABA_DESTINO]
+    try:
+        import win32com.client as win32
+        from win32com.client import constants
+    except Exception as e:
+        raise RuntimeError(
+            "Não consegui importar win32com. Instale com: pip install pywin32"
+        ) from e
 
-    # garante 6 colunas (A-F)
-    df6 = df.copy()
-    if df6.shape[1] < 6:
-        for i in range(6 - df6.shape[1]):
-            df6[f"col_vazia_{i+1}"] = ""
-    df6 = df6.iloc[:, :6].copy()
+    # salva o download em um arquivo temporário .xls
+    tmp_dir = tempfile.gettempdir()
+    tmp_path = os.path.join(tmp_dir, "debentures_mercsec_mes_tmp.xls")
+    with open(tmp_path, "wb") as f:
+        f.write(xls_bytes)
 
-    # C (idx 2), D (idx 3), E (idx 4)
-    df6.iloc[:, 2] = df6.iloc[:, 2].map(somente_digitos)
-    df6.iloc[:, 3] = df6.iloc[:, 3].map(normalizar_coluna_D)
-    df6.iloc[:, 4] = df6.iloc[:, 4].map(somente_digitos)
+    xl = win32.DispatchEx("Excel.Application")
+    xl.Visible = False
+    xl.DisplayAlerts = False
+    xl.AskToUpdateLinks = False
 
-    # limpa A:F antigas
-    max_rows = max(ws.max_row or 0, len(df6) + 1)
-    for r in range(1, max_rows + 1):
-        for c in range(1, 7):
-            ws.cell(row=r, column=c).value = None
+    wb_src = None
+    wb_dst = None
 
-    # header
-    for c, name in enumerate(df6.columns, start=1):
-        ws.cell(row=1, column=c, value=str(name))
+    try:
+        # abre fonte (download) e destino (planilha mae)
+        wb_src = xl.Workbooks.Open(tmp_path, ReadOnly=True)
+        wb_dst = xl.Workbooks.Open(PLANILHA_MAE_PATH)
 
-    # dados
-    for r_idx, row in enumerate(df6.itertuples(index=False), start=2):
-        for c_idx, val in enumerate(row, start=1):
-            ws.cell(row=r_idx, column=c_idx, value=val)
+        ws_src = wb_src.Worksheets(1)  # geralmente primeira aba
 
-    wb.save(PLANILHA_MAE_PATH)
+        # aba destino pelo nome
+        try:
+            ws_dst = wb_dst.Worksheets(ABA_DESTINO)
+        except Exception:
+            raise RuntimeError(f"Aba '{ABA_DESTINO}' não existe na planilha mãe.")
+
+        # acha última linha usada na fonte (considerando coluna A)
+        last_row = ws_src.Cells(ws_src.Rows.Count, 1).End(constants.xlUp).Row
+        if last_row < 1:
+            raise RuntimeError("Fonte parece vazia (não achei última linha).")
+
+        # Copia A:F (inclui header)
+        rng_src = ws_src.Range(ws_src.Cells(1, 1), ws_src.Cells(last_row, 6))
+
+        # Limpa A:F no destino (um pouco acima do necessário pra evitar lixo)
+        ws_dst.Range("A:F").ClearContents
+
+        # Cola em A1 como no manual:
+        # xlPasteValuesAndNumberFormats preserva números/formatos interpretados pelo Excel
+        rng_src.Copy()
+        ws_dst.Range("A1").PasteSpecial(Paste=constants.xlPasteValuesAndNumberFormats)
+
+        # limpa clipboard do Excel
+        xl.CutCopyMode = False
+
+        wb_dst.Save()
+
+        print(f"✅ Colado via Excel (copy/paste real). Linhas: {last_row} | Colunas: A-F")
+    finally:
+        # fecha tudo corretamente
+        try:
+            if wb_src is not None:
+                wb_src.Close(SaveChanges=False)
+        except Exception:
+            pass
+        try:
+            if wb_dst is not None:
+                wb_dst.Close(SaveChanges=True)
+        except Exception:
+            pass
+        try:
+            xl.Quit()
+        except Exception:
+            pass
+
+        # tenta remover temp
+        try:
+            os.remove(tmp_path)
+        except Exception:
+            pass
 
 # ================= MAIN =================
 if __name__ == "__main__":
@@ -250,11 +204,8 @@ if __name__ == "__main__":
     print("📥 Download em memória...")
     xls_bytes = baixar_mes_anterior_em_memoria()
 
-    print("📊 Lendo dados (forçando texto)...")
-    df = ler_xls_em_memoria(xls_bytes)
-
-    print("📄 Colando colunas A–F (D preserva 140.000 -> 140000)...")
-    colar_A_F_na_planilha_mae(df)
+    print("📄 Colando na planilha mãe via Excel (igual Ctrl+C / Ctrl+V)...")
+    colar_via_excel_copy_paste(xls_bytes)
 
     print("✅ Concluído com sucesso.")
 
