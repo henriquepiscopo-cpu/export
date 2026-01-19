@@ -20,7 +20,6 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0",
     "Accept": "*/*",
     "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
-    "Connection": "close",
     "Referer": "https://www.debentures.com.br/",
 }
 
@@ -62,7 +61,6 @@ def parse_hidden(html: str) -> dict:
 
 def find_eventtargets(html: str) -> dict:
     ids = re.findall(r'id="(ctl00_ContentPlaceHolder1_[^"]+)"', html, flags=re.I)
-
     export_id = None
     prev_id = None
 
@@ -142,10 +140,14 @@ def ler_xls_em_memoria(xls_bytes: bytes) -> pd.DataFrame:
 
 # ================= Normalização =================
 def somente_digitos(x):
+    """
+    Para colunas C e E: remove '.' e ',' e mantém só dígitos (e sinal).
+    (Não interpreta decimal.)
+    """
     if x is None:
         return None
 
-    s = str(x).strip()
+    s = str(x).strip().replace("\xa0", "").replace(" ", "")
     if s == "":
         return None
 
@@ -166,24 +168,51 @@ def somente_digitos(x):
     val = int(s)
     return -val if neg else val
 
-
-def digitos_e_div10_se_termina_com_virgula_zero(x):
+def normalizar_coluna_D(x):
     """
-    COLUNA D:
-    Divide por 10 SOMENTE se o valor original terminar com ',0'
+    Coluna D:
+    - '.' é milhar (remove)
+    - ',' é decimal (corta parte decimal), EXCETO quando parecer milhar (ex: '1,500')
+    Retorna inteiro.
     """
     if x is None:
         return None
 
-    s0 = str(x).strip().replace("\xa0", "").replace(" ", "")
-    v = somente_digitos(s0)
-    if v is None:
+    s = str(x).strip().replace("\xa0", "").replace(" ", "")
+    if s == "":
         return None
 
-    if re.search(r",0$", s0):
-        return v // 10
+    neg = False
+    if s.startswith("(") and s.endswith(")"):
+        neg = True
+        s = s[1:-1]
+    if s.startswith("-"):
+        neg = True
+        s = s[1:]
 
-    return v
+    # mantém só dígitos e separadores
+    s = re.sub(r"[^0-9\.,]", "", s)
+    if s == "":
+        return None
+
+    # '.' sempre milhar
+    s_no_dot = s.replace(".", "")
+
+    if "," in s_no_dot:
+        # se padrão milhar (,\d{3} no fim) => remove vírgula
+        if re.search(r",\d{3}$", s_no_dot):
+            s_int = s_no_dot.replace(",", "")
+        else:
+            # decimal => pega parte inteira
+            s_int = s_no_dot.split(",", 1)[0]
+    else:
+        s_int = s_no_dot
+
+    if s_int == "":
+        return None
+
+    val = int(s_int)
+    return -val if neg else val
 
 # ================= Colar A:F =================
 def colar_A_F_na_planilha_mae(df: pd.DataFrame):
@@ -207,16 +236,13 @@ def colar_A_F_na_planilha_mae(df: pd.DataFrame):
             df6[f"col_vazia_{i+1}"] = None
     df6 = df6.iloc[:, :6]
 
-    # C
+    # Ajuste por coluna (A-F):
+    # C (idx 2) e E (idx 4): remove separadores, mantém dígitos
     df6[df6.columns[2]] = df6[df6.columns[2]].map(somente_digitos)
-
-    # D (REGRA FINAL)
-    df6[df6.columns[3]] = df6[df6.columns[3]].map(
-        digitos_e_div10_se_termina_com_virgula_zero
-    )
-
-    # E
     df6[df6.columns[4]] = df6[df6.columns[4]].map(somente_digitos)
+
+    # D (idx 3): '.' milhar, ',' decimal (corta), exceto quando ',###' (milhar)
+    df6[df6.columns[3]] = df6[df6.columns[3]].map(normalizar_coluna_D)
 
     # limpa A:F antigas
     max_rows = max(ws.max_row or 0, len(df6) + 1)
@@ -245,6 +271,11 @@ if __name__ == "__main__":
 
     print("📊 Lendo dados...")
     df = ler_xls_em_memoria(xls_bytes)
+
+    print("📄 Colando colunas A–F (D com '.' milhar e ',' decimal)...")
+    colar_A_F_na_planilha_mae(df)
+
+    print("✅ Concluído com sucesso.")
 
     print("📄 Colando colunas A–F (D divide só se terminar com ',0')...")
     colar_A_F_na_planilha_mae(df)
