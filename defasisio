@@ -9,10 +9,10 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from openpyxl import load_workbook
 
-# ================= CONFIG (AJUSTE AQUI) =================
+# ================= CONFIG =================
 PLANILHA_MAE_PATH = r"C:\Users\i467182\Documents\Code\Projetim\MinhaPlanilhaMae.xlsm"
 ABA_DESTINO = "python"
-# ========================================================
+# =========================================
 
 URL = "https://www.debentures.com.br/exploreosnd/consultaadados/mercadosecundario/MercSecMes.aspx"
 
@@ -26,7 +26,6 @@ HEADERS = {
 # ================= HTTP =================
 def build_session() -> requests.Session:
     s = requests.Session()
-    s.trust_env = True
     retry = Retry(
         total=7,
         backoff_factor=0.8,
@@ -46,37 +45,26 @@ def mes_ano_anterior(ref=None):
 
 def current_period_from_html(html: str) -> str:
     m = re.search(r"\b(\d{1,2})/(\d{4})\b", html or "")
-    if not m:
-        return ""
-    return f"{int(m.group(1))}/{m.group(2)}"
+    return f"{int(m.group(1))}/{m.group(2)}" if m else ""
 
 # ================= WebForms =================
 def parse_hidden(html: str) -> dict:
     hidden = {}
     for name in ["__VIEWSTATE", "__EVENTVALIDATION", "__VIEWSTATEGENERATOR"]:
-        m = re.search(rf'id="{re.escape(name)}"\s+value="([^"]*)"', html, flags=re.I)
+        m = re.search(rf'id="{name}"\s+value="([^"]*)"', html)
         if m:
             hidden[name] = m.group(1)
     return hidden
 
 def find_eventtargets(html: str) -> dict:
-    ids = re.findall(r'id="(ctl00_ContentPlaceHolder1_[^"]+)"', html, flags=re.I)
-    export_id = None
-    prev_id = None
+    ids = re.findall(r'id="(ctl00_ContentPlaceHolder1_[^"]+)"', html)
+    export_id = next((i for i in ids if i.lower().endswith("_lnkex")), None)
+    prev_id = next((i for i in ids if "mes" in i.lower() and ("ant" in i.lower() or "prev" in i.lower())), None)
+    return {"export": export_id, "prev": prev_id}
 
-    for i in ids:
-        low = i.lower()
-        if export_id is None and low.endswith("_lnkex"):
-            export_id = i
-        if prev_id is None and "mes" in low and ("ant" in low or "prev" in low):
-            prev_id = i
-
-    return {"export": export_id, "prev": prev_id, "all": ids}
-
-def postback(s: requests.Session, eventtarget_id: str, hidden: dict) -> requests.Response:
-    eventtarget = eventtarget_id.replace("_", "$")
+def postback(s, eventtarget_id, hidden):
     data = {
-        "__EVENTTARGET": eventtarget,
+        "__EVENTTARGET": eventtarget_id.replace("_", "$"),
         "__EVENTARGUMENT": "",
         "__VIEWSTATE": hidden.get("__VIEWSTATE", ""),
         "__VIEWSTATEGENERATOR": hidden.get("__VIEWSTATEGENERATOR", ""),
@@ -86,126 +74,63 @@ def postback(s: requests.Session, eventtarget_id: str, hidden: dict) -> requests
     r.raise_for_status()
     return r
 
-# ================= Download em memória =================
+# ================= Download =================
 def baixar_mes_anterior_em_memoria() -> bytes:
-    target_m, target_y = mes_ano_anterior()
-    target_label = f"{target_m}/{target_y}"
-
+    m, y = mes_ano_anterior()
+    alvo = f"{m}/{y}"
     s = build_session()
 
-    r0 = s.get(URL, headers=HEADERS, timeout=(10, 60), verify=certifi.where())
-    r0.raise_for_status()
-    html = r0.text
+    r = s.get(URL, headers=HEADERS)
+    r.raise_for_status()
 
+    html = r.text
     hidden = parse_hidden(html)
     ids = find_eventtargets(html)
 
-    if not ids["export"] or not ids["prev"]:
-        raise RuntimeError("Não achei controles de navegação/export.")
-
     cur = current_period_from_html(html)
     if not cur:
-        raise RuntimeError("Não consegui detectar o período atual.")
-
-    print("Período inicial:", cur, "| alvo:", target_label)
+        raise RuntimeError("Não detectei período inicial")
 
     for _ in range(36):
-        if cur == target_label:
+        if cur == alvo:
             break
         r = postback(s, ids["prev"], hidden)
         html = r.text
         hidden = parse_hidden(html)
         cur = current_period_from_html(html)
 
-    if cur != target_label:
-        raise RuntimeError(f"Não consegui chegar em {target_label} (parei em {cur}).")
+    if cur != alvo:
+        raise RuntimeError(f"Não cheguei em {alvo}")
 
-    r_export = postback(s, ids["export"], hidden)
+    r = postback(s, ids["export"], hidden)
+    if "attachment" not in (r.headers.get("Content-Disposition") or "").lower():
+        raise RuntimeError("Export não retornou arquivo")
 
-    if "attachment" not in (r_export.headers.get("Content-Disposition") or "").lower():
-        raise RuntimeError("Export não retornou arquivo.")
+    return r.content
 
-    return r_export.content
-
-# ================= Leitura robusta =================
+# ================= Leitura =================
 def ler_xls_em_memoria(xls_bytes: bytes) -> pd.DataFrame:
     try:
-        return pd.read_excel(BytesIO(xls_bytes), engine="xlrd")
+        return pd.read_excel(BytesIO(xls_bytes))
     except Exception:
         html = xls_bytes.decode("latin1", errors="ignore")
-        dfs = pd.read_html(StringIO(html))
-        if not dfs:
-            raise RuntimeError("Nenhuma tabela encontrada no HTML.")
-        return dfs[0]
+        return pd.read_html(StringIO(html))[0]
 
-# ================= Normalização (SEM zero extra) =================
-def _num_to_int_if_possible(x):
-    # evita o caso 1566.0 virar "1566.0" e depois "15660"
-    if isinstance(x, bool):
-        return x
-    if isinstance(x, int):
-        return x
-    if isinstance(x, float):
-        if pd.isna(x):
-            return None
-        if x.is_integer():
-            return int(x)
-        # se vier float com decimais reais, aqui você escolhe:
-        # truncar:
-        return int(x)
-    return None  # sinaliza "não-numérico puro"
-
-def somente_digitos(x):
-    """
-    Para colunas C e E: remove '.' e ',' e mantém só dígitos (e sinal).
-    """
-    if x is None:
-        return None
-
-    n = _num_to_int_if_possible(x)
-    if isinstance(n, int):
-        return n
-
-    s = str(x).strip().replace("\xa0", "").replace(" ", "")
-    if s == "":
-        return None
-
-    neg = False
-    if s.startswith("(") and s.endswith(")"):
-        neg = True
-        s = s[1:-1]
-    if s.startswith("-"):
-        neg = True
-        s = s[1:]
-
-    s = s.replace(".", "").replace(",", "")
-    s = re.sub(r"\D", "", s)
-
-    if s == "":
-        return None
-
-    val = int(s)
-    return -val if neg else val
-
+# ================= NORMALIZAÇÃO =================
 def normalizar_coluna_D(x):
     """
-    Coluna D:
-    - Se já veio como número (ex: 1566.0), converte direto pra int (1566) e pronto.
-    - Se veio como texto:
-        '.' = milhar (remove)
-        ',' = decimal (corta parte decimal), EXCETO quando parecer milhar (ex: '1,500')
-    Retorna inteiro.
+    Converte qualquer formato numérico comum para inteiro correto:
+    1.566 / 1,566 / 1566,0 / 1566.0 / 1566,75 → 1566
     """
-    if x is None:
+    if x is None or (isinstance(x, float) and pd.isna(x)):
         return None
 
-    n = _num_to_int_if_possible(x)
-    if isinstance(n, int):
-        return n
+    # número puro
+    if isinstance(x, (int, float)):
+        return int(x)
 
-    s = str(x).strip().replace("\xa0", "").replace(" ", "")
-    if s == "":
-        return None
+    s = str(x).strip().replace(" ", "").replace("\xa0", "")
+    s = re.sub(r"[^\d\.,\-()]", "", s)
 
     neg = False
     if s.startswith("(") and s.endswith(")"):
@@ -215,88 +140,67 @@ def normalizar_coluna_D(x):
         neg = True
         s = s[1:]
 
-    s = re.sub(r"[^0-9\.,]", "", s)
+    # tem ponto e vírgula → ponto milhar, vírgula decimal
+    if "." in s and "," in s:
+        s = s.replace(".", "")
+        s = s.split(",", 1)[0]
+
+    # só vírgula
+    elif "," in s:
+        if re.fullmatch(r"\d{1,3}(,\d{3})+", s):
+            s = s.replace(",", "")
+        else:
+            s = s.split(",", 1)[0]
+
+    # só ponto
+    elif "." in s:
+        s = s.replace(".", "")
+
     if s == "":
         return None
 
-    # '.' sempre milhar
-    s_no_dot = s.replace(".", "")
+    v = int(s)
+    return -v if neg else v
 
-    if "," in s_no_dot:
-        # milhar por vírgula (ex: 1,500)
-        if re.search(r",\d{3}$", s_no_dot):
-            s_int = s_no_dot.replace(",", "")
-        else:
-            # decimal: pega parte inteira
-            s_int = s_no_dot.split(",", 1)[0]
-    else:
-        s_int = s_no_dot
-
-    if s_int == "":
+def somente_digitos(x):
+    if x is None or (isinstance(x, float) and pd.isna(x)):
         return None
+    if isinstance(x, (int, float)):
+        return int(x)
+    s = re.sub(r"\D", "", str(x))
+    return int(s) if s else None
 
-    val = int(s_int)
-    return -val if neg else val
-
-# ================= Colar A:F =================
+# ================= COLAR NA PLANILHA =================
 def colar_A_F_na_planilha_mae(df: pd.DataFrame):
-    if not os.path.exists(PLANILHA_MAE_PATH):
-        raise FileNotFoundError(f"Planilha não encontrada: {PLANILHA_MAE_PATH}")
-
-    wb = load_workbook(
-        PLANILHA_MAE_PATH,
-        keep_vba=PLANILHA_MAE_PATH.lower().endswith(".xlsm")
-    )
-
-    if ABA_DESTINO not in wb.sheetnames:
-        raise RuntimeError(f"Aba '{ABA_DESTINO}' não existe.")
-
+    wb = load_workbook(PLANILHA_MAE_PATH, keep_vba=True)
     ws = wb[ABA_DESTINO]
 
-    # garante 6 colunas (A-F)
-    df6 = df.copy()
-    if df6.shape[1] < 6:
-        for i in range(6 - df6.shape[1]):
-            df6[f"col_vazia_{i+1}"] = None
-    df6 = df6.iloc[:, :6]
+    df6 = df.iloc[:, :6].copy()
 
-    # C (idx 2) e E (idx 4): só dígitos
-    df6[df6.columns[2]] = df6[df6.columns[2]].map(somente_digitos)
-    df6[df6.columns[4]] = df6[df6.columns[4]].map(somente_digitos)
+    # C, D, E
+    df6.iloc[:, 2] = df6.iloc[:, 2].map(somente_digitos)
+    df6.iloc[:, 3] = df6.iloc[:, 3].map(normalizar_coluna_D)
+    df6.iloc[:, 4] = df6.iloc[:, 4].map(somente_digitos)
 
-    # D (idx 3): ponto milhar, vírgula decimal (corta) com proteção p/ float 1566.0
-    df6[df6.columns[3]] = df6[df6.columns[3]].map(normalizar_coluna_D)
+    ws.delete_rows(1, ws.max_row)
 
-    # limpa A:F antigas
-    max_rows = max(ws.max_row or 0, len(df6) + 1)
-    for r in range(1, max_rows + 1):
-        for c in range(1, 7):
-            ws.cell(row=r, column=c).value = None
-
-    # header
-    for c, name in enumerate(df6.columns, start=1):
-        ws.cell(row=1, column=c, value=str(name))
-
-    # dados
-    for r_idx, row in enumerate(df6.itertuples(index=False), start=2):
-        for c_idx, val in enumerate(row, start=1):
-            ws.cell(row=r_idx, column=c_idx, value=val)
+    ws.append(list(df6.columns))
+    for row in df6.itertuples(index=False):
+        ws.append(list(row))
 
     wb.save(PLANILHA_MAE_PATH)
 
 # ================= MAIN =================
 if __name__ == "__main__":
-    m, y = mes_ano_anterior()
-    print(f"✔ Baixando mês anterior: {m:02d}/{y}")
-
-    print("📥 Download em memória...")
+    print("📥 Baixando mês anterior...")
     xls_bytes = baixar_mes_anterior_em_memoria()
 
     print("📊 Lendo dados...")
     df = ler_xls_em_memoria(xls_bytes)
 
-    print("📄 Colando colunas A–F (D corrigida sem zero extra de float)...")
+    print("📄 Colando na planilha mãe...")
     colar_A_F_na_planilha_mae(df)
 
-    print("✅ Concluído com sucesso.")
+    print("✅ Finalizado com sucesso.")
+
 
