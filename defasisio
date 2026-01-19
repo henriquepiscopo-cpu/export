@@ -111,22 +111,27 @@ def baixar_mes_anterior_em_memoria() -> bytes:
 
     return r.content
 
-# ================= Excel COM Copy/Paste (igual manual) =================
+# ================= Excel COM Copy/Paste =================
 def colar_via_excel_copy_paste(xls_bytes: bytes):
+    """
+    Faz exatamente o que você faz manualmente:
+      abre o arquivo do download no Excel -> copia A:F -> cola em A1 na aba ABA_DESTINO
+    Isso evita 100% os bugs de separador/locale.
+    """
     if not os.path.exists(PLANILHA_MAE_PATH):
         raise FileNotFoundError(f"Planilha não encontrada: {PLANILHA_MAE_PATH}")
 
     try:
         import win32com.client as win32
-        from win32com.client import constants
     except Exception as e:
-        raise RuntimeError(
-            "Não consegui importar win32com. Instale com: pip install pywin32"
-        ) from e
+        raise RuntimeError("Faltou pywin32. Instale com: pip install pywin32") from e
 
-    # salva o download em um arquivo temporário .xls
-    tmp_dir = tempfile.gettempdir()
-    tmp_path = os.path.join(tmp_dir, "debentures_mercsec_mes_tmp.xls")
+    # Constantes numéricas (evita erro de constants.xlUp)
+    XL_UP = -4162
+    XL_PASTE_VALUES_AND_NUMBER_FORMATS = 12
+
+    # salva o download em temp .xls
+    tmp_path = os.path.join(tempfile.gettempdir(), "debentures_mercsec_mes_tmp.xls")
     with open(tmp_path, "wb") as f:
         f.write(xls_bytes)
 
@@ -139,42 +144,38 @@ def colar_via_excel_copy_paste(xls_bytes: bytes):
     wb_dst = None
 
     try:
-        # abre fonte (download) e destino (planilha mae)
         wb_src = xl.Workbooks.Open(tmp_path, ReadOnly=True)
         wb_dst = xl.Workbooks.Open(PLANILHA_MAE_PATH)
 
-        ws_src = wb_src.Worksheets(1)  # geralmente primeira aba
+        ws_src = wb_src.Worksheets(1)
 
-        # aba destino pelo nome
         try:
             ws_dst = wb_dst.Worksheets(ABA_DESTINO)
         except Exception:
             raise RuntimeError(f"Aba '{ABA_DESTINO}' não existe na planilha mãe.")
 
-        # acha última linha usada na fonte (considerando coluna A)
-        last_row = ws_src.Cells(ws_src.Rows.Count, 1).End(constants.xlUp).Row
+        # ultima linha usada pela coluna A (xlUp)
+        last_row = ws_src.Cells(ws_src.Rows.Count, 1).End(XL_UP).Row
         if last_row < 1:
             raise RuntimeError("Fonte parece vazia (não achei última linha).")
 
-        # Copia A:F (inclui header)
+        # range A1:F(last_row)
         rng_src = ws_src.Range(ws_src.Cells(1, 1), ws_src.Cells(last_row, 6))
 
-        # Limpa A:F no destino (um pouco acima do necessário pra evitar lixo)
+        # limpa destino
         ws_dst.Range("A:F").ClearContents
 
-        # Cola em A1 como no manual:
-        # xlPasteValuesAndNumberFormats preserva números/formatos interpretados pelo Excel
+        # copia/cola como no Ctrl+C / Ctrl+V
         rng_src.Copy()
-        ws_dst.Range("A1").PasteSpecial(Paste=constants.xlPasteValuesAndNumberFormats)
+        ws_dst.Range("A1").PasteSpecial(Paste=XL_PASTE_VALUES_AND_NUMBER_FORMATS)
 
-        # limpa clipboard do Excel
+        # limpa clipboard
         xl.CutCopyMode = False
 
         wb_dst.Save()
+        print(f"✅ Colado via Excel. Linhas: {last_row} | Colunas: A-F")
 
-        print(f"✅ Colado via Excel (copy/paste real). Linhas: {last_row} | Colunas: A-F")
     finally:
-        # fecha tudo corretamente
         try:
             if wb_src is not None:
                 wb_src.Close(SaveChanges=False)
@@ -190,7 +191,6 @@ def colar_via_excel_copy_paste(xls_bytes: bytes):
         except Exception:
             pass
 
-        # tenta remover temp
         try:
             os.remove(tmp_path)
         except Exception:
@@ -204,10 +204,11 @@ if __name__ == "__main__":
     print("📥 Download em memória...")
     xls_bytes = baixar_mes_anterior_em_memoria()
 
-    print("📄 Colando na planilha mãe via Excel (igual Ctrl+C / Ctrl+V)...")
+    print("📄 Colando na planilha mãe via Excel (igual Ctrl+C/Ctrl+V)...")
     colar_via_excel_copy_paste(xls_bytes)
 
     print("✅ Concluído com sucesso.")
+
 
 
 
