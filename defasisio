@@ -140,13 +140,12 @@ def ler_xls_em_memoria(xls_bytes: bytes) -> pd.DataFrame:
             raise RuntimeError("Nenhuma tabela encontrada no HTML.")
         return dfs[0]
 
-# ================= Normalização forte C/D/E =================
+# ================= Normalização C/D/E =================
 def somente_digitos(x):
     """
     Remove ponto e vírgula e mantém só dígitos (e sinal).
-    NÃO interpreta decimal. Ex:
-      '1,500' -> 1500
-      '1000,0' -> 10000 (antes do ajuste específico)
+    NÃO interpreta decimal.
+    Ex: '1,500' -> 1500 ; '1000,0' -> 10000 (antes do /10)
     """
     if x is None:
         return None
@@ -172,14 +171,21 @@ def somente_digitos(x):
     val = int(s)
     return -val if neg else val
 
-def somente_digitos_div10(x):
+def somente_digitos_div10_com_excecoes(x, row_idx, excecoes=(0, 1616)):
     """
-    Para a coluna D: o site vem com 1 casa decimal (ex: 1000,0).
-    A gente remove separadores e DIVIDE POR 10 para voltar ao inteiro correto.
+    Coluna D:
+      - remove separadores (somente_digitos)
+      - divide por 10
+      - EXCETO nos índices de linha (row_idx) listados em 'excecoes'
+
+    row_idx é índice 0-based do df (primeira linha de dados = 0, que vira Excel linha 2)
+    excecoes=(0,1616) => não divide D2 e D1618 por 10
     """
     v = somente_digitos(x)
     if v is None:
         return None
+    if row_idx in excecoes:
+        return v
     return v // 10
 
 # ================= Colar A:F =================
@@ -208,8 +214,12 @@ def colar_A_F_na_planilha_mae(df: pd.DataFrame):
     # C (idx 2): remove separadores, mantém dígitos
     df6[df6.columns[2]] = df6[df6.columns[2]].map(somente_digitos)
 
-    # D (idx 3): remove separadores e divide por 10 (corrige 1000,0 -> 1000)
-    df6[df6.columns[3]] = df6[df6.columns[3]].map(somente_digitos_div10)
+    # D (idx 3): divide por 10, EXCETO nas linhas Excel D2 e D1618
+    colD = df6.columns[3]
+    df6[colD] = [
+        somente_digitos_div10_com_excecoes(x, i, excecoes=(0, 1616))
+        for i, x in enumerate(df6[colD].tolist())
+    ]
 
     # E (idx 4): remove separadores, mantém dígitos
     df6[df6.columns[4]] = df6[df6.columns[4]].map(somente_digitos)
@@ -242,7 +252,7 @@ if __name__ == "__main__":
     print("📊 Lendo dados...")
     df = ler_xls_em_memoria(xls_bytes)
 
-    print("📄 Colando colunas A–F (C/E sem separadores; D corrigida /10)...")
+    print("📄 Colando colunas A–F (C/E sem separadores; D /10 com exceções D2 e D1618)...")
     colar_A_F_na_planilha_mae(df)
 
     print("✅ Concluído com sucesso.")
