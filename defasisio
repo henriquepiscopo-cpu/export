@@ -11,7 +11,7 @@ from urllib3.util.retry import Retry
 from openpyxl import load_workbook
 
 # ================= CONFIG (AJUSTE AQUI) =================
-PLANILHA_MAE_PATH = r"C:\Users\i467182\Documents\Code\Projetim\MinhaPlanilhaMae.xlsm"  # <-- MUDE AQUI
+PLANILHA_MAE_PATH = r"C:\Users\i467182\Documents\Code\Projetim\MinhaPlanilhaMae.xlsm"
 ABA_DESTINO = "python"
 # ========================================================
 
@@ -25,7 +25,7 @@ HEADERS = {
     "Referer": "https://www.debentures.com.br/",
 }
 
-# ----------------------- HTTP -----------------------
+# ================= HTTP =================
 def build_session() -> requests.Session:
     s = requests.Session()
     s.trust_env = True
@@ -39,7 +39,7 @@ def build_session() -> requests.Session:
     s.mount("https://", HTTPAdapter(max_retries=retry))
     return s
 
-# ----------------------- Datas -----------------------
+# ================= Datas =================
 def mes_ano_anterior(ref=None):
     ref = ref or date.today()
     if ref.month == 1:
@@ -52,7 +52,7 @@ def current_period_from_html(html: str) -> str:
         return ""
     return f"{int(m.group(1))}/{m.group(2)}"
 
-# ----------------------- WebForms helpers -----------------------
+# ================= WebForms =================
 def parse_hidden(html: str) -> dict:
     hidden = {}
     for name in ["__VIEWSTATE", "__EVENTVALIDATION", "__VIEWSTATEGENERATOR"]:
@@ -71,7 +71,7 @@ def find_eventtargets(html: str) -> dict:
         low = i.lower()
         if export_id is None and low.endswith("_lnkex"):
             export_id = i
-        if prev_id is None and ("mes" in low) and (("ant" in low) or ("prev" in low)):
+        if prev_id is None and "mes" in low and ("ant" in low or "prev" in low):
             prev_id = i
 
     return {"export": export_id, "prev": prev_id, "all": ids}
@@ -89,7 +89,7 @@ def postback(s: requests.Session, eventtarget_id: str, hidden: dict) -> requests
     r.raise_for_status()
     return r
 
-# ----------------------- Download em memória -----------------------
+# ================= Download em memória =================
 def baixar_mes_anterior_em_memoria() -> bytes:
     target_m, target_y = mes_ano_anterior()
     target_label = f"{target_m}/{target_y}"
@@ -103,18 +103,12 @@ def baixar_mes_anterior_em_memoria() -> bytes:
     hidden = parse_hidden(html)
     ids = find_eventtargets(html)
 
-    if not ids["export"]:
-        raise RuntimeError("Não achei o controle de export (lnkex) no HTML.")
-    if not ids["prev"]:
-        candidates = [i for i in ids["all"] if "mes" in i.lower()]
-        raise RuntimeError(
-            "Não achei o controle de mês anterior no HTML.\n"
-            f"Candidatos com 'Mes': {candidates[:40]}"
-        )
+    if not ids["export"] or not ids["prev"]:
+        raise RuntimeError("Não achei controles de navegação/export.")
 
     cur = current_period_from_html(html)
     if not cur:
-        raise RuntimeError("Não consegui detectar o período atual (mm/aaaa) na página.")
+        raise RuntimeError("Não consegui detectar o período atual.")
 
     print("Período inicial:", cur, "| alvo:", target_label)
 
@@ -125,24 +119,18 @@ def baixar_mes_anterior_em_memoria() -> bytes:
         html = r.text
         hidden = parse_hidden(html)
         cur = current_period_from_html(html)
-        if cur:
-            print("Agora:", cur)
 
     if cur != target_label:
-        raise RuntimeError(f"Não consegui chegar no alvo {target_label}. Parei em {cur}.")
+        raise RuntimeError(f"Não consegui chegar em {target_label} (parei em {cur}).")
 
     r_export = postback(s, ids["export"], hidden)
 
-    cdisp = (r_export.headers.get("Content-Disposition") or "").lower()
-    if "attachment" not in cdisp:
-        debug_path = os.path.join(os.path.dirname(PLANILHA_MAE_PATH), "debug_export.html")
-        with open(debug_path, "w", encoding="utf-8") as f:
-            f.write(r_export.text)
-        raise RuntimeError(f"Export não retornou arquivo. Salvei {debug_path}")
+    if "attachment" not in (r_export.headers.get("Content-Disposition") or "").lower():
+        raise RuntimeError("Export não retornou arquivo.")
 
     return r_export.content
 
-# ----------------------- Leitura robusta (XLS ou HTML) -----------------------
+# ================= Leitura robusta =================
 def ler_xls_em_memoria(xls_bytes: bytes) -> pd.DataFrame:
     try:
         return pd.read_excel(BytesIO(xls_bytes), engine="xlrd")
@@ -150,139 +138,95 @@ def ler_xls_em_memoria(xls_bytes: bytes) -> pd.DataFrame:
         html = xls_bytes.decode("latin1", errors="ignore")
         dfs = pd.read_html(StringIO(html))
         if not dfs:
-            raise RuntimeError("Não encontrei tabelas no HTML retornado.")
+            raise RuntimeError("Nenhuma tabela encontrada no HTML.")
         return dfs[0]
 
-# ----------------------- Normalização pt-BR -----------------------
-def _ptbr_to_number(x):
-    if x is None or (isinstance(x, float) and np.isnan(x)):
-        return x
+# ================= Normalização forte C/D/E =================
+def somente_digitos_int(x):
+    if x is None:
+        return None
     if isinstance(x, (int, float)):
-        return x
-    if not isinstance(x, str):
-        return x
+        try:
+            return int(round(float(x)))
+        except:
+            return None
 
-    s = x.strip()
+    s = str(x).strip()
     if s == "":
-        return x
-
-    s = s.replace("\xa0", "").replace(" ", "")
+        return None
 
     neg = False
     if s.startswith("(") and s.endswith(")"):
         neg = True
         s = s[1:-1]
+    if s.startswith("-"):
+        neg = True
+        s = s[1:]
 
-    s = re.sub(r"^[Rr]\$+", "", s)
-    pct = False
-    if s.endswith("%"):
-        pct = True
-        s = s[:-1]
+    digits = re.sub(r"\D", "", s)
+    if digits == "":
+        return None
 
-    if not re.search(r"\d", s):
-        return x
+    val = int(digits)
+    return -val if neg else val
 
-    if "," in s:
-        s2 = s.replace(".", "").replace(",", ".")
-        try:
-            val = float(s2)
-            if neg:
-                val = -val
-            if pct:
-                val = val / 100.0
-            return val
-        except:
-            return x
-
-    if re.fullmatch(r"\d{1,3}(\.\d{3})+", s):
-        try:
-            val = int(s.replace(".", ""))
-            if neg:
-                val = -val
-            return val
-        except:
-            return x
-
-    if re.fullmatch(r"\d+\.\d+", s):
-        try:
-            val = float(s)
-            if neg:
-                val = -val
-            if pct:
-                val = val / 100.0
-            return val
-        except:
-            return x
-
-    if re.fullmatch(r"\d+", s):
-        try:
-            val = int(s)
-            if neg:
-                val = -val
-            return val
-        except:
-            return x
-
-    return x
-
-def normalizar_ptbr_df(df: pd.DataFrame) -> pd.DataFrame:
-    out = df.copy()
-    for col in out.columns:
-        if out[col].dtype == "object":
-            out[col] = out[col].map(_ptbr_to_number)
-    return out
-
-# ----------------------- Colar A:F na planilha-mãe -----------------------
+# ================= Colar A:F =================
 def colar_A_F_na_planilha_mae(df: pd.DataFrame):
     if not os.path.exists(PLANILHA_MAE_PATH):
-        raise FileNotFoundError(f"Não achei a planilha-mãe em: {PLANILHA_MAE_PATH}")
+        raise FileNotFoundError(f"Planilha não encontrada: {PLANILHA_MAE_PATH}")
 
-    keep_vba = PLANILHA_MAE_PATH.lower().endswith(".xlsm")
-    wb = load_workbook(PLANILHA_MAE_PATH, keep_vba=keep_vba)
+    wb = load_workbook(
+        PLANILHA_MAE_PATH,
+        keep_vba=PLANILHA_MAE_PATH.lower().endswith(".xlsm")
+    )
 
     if ABA_DESTINO not in wb.sheetnames:
-        raise RuntimeError(f"Aba '{ABA_DESTINO}' não existe. Abas: {wb.sheetnames}")
+        raise RuntimeError(f"Aba '{ABA_DESTINO}' não existe.")
 
     ws = wb[ABA_DESTINO]
 
+    # garante 6 colunas
     df6 = df.copy()
     if df6.shape[1] < 6:
-        for k in range(6 - df6.shape[1]):
-            df6[f"col_vazia_{k+1}"] = None
+        for i in range(6 - df6.shape[1]):
+            df6[f"col_vazia_{i+1}"] = None
     df6 = df6.iloc[:, :6]
 
-    # ✅ normaliza ponto/virgula pt-BR antes de colar
-    df6 = normalizar_ptbr_df(df6)
+    # 🔥 regra definitiva: C, D, E só dígitos
+    for idx in [2, 3, 4]:  # C,D,E
+        col = df6.columns[idx]
+        df6[col] = df6[col].map(somente_digitos_int)
 
-    new_rows = len(df6) + 1  # +1 header
-    old_rows = ws.max_row if ws.max_row else 0
-
-    max_rows_to_clear = max(old_rows, new_rows)
-    for r in range(1, max_rows_to_clear + 1):
-        for c in range(1, 7):  # A=1 ... F=6
+    # limpa A:F antigas
+    max_rows = max(ws.max_row or 0, len(df6) + 1)
+    for r in range(1, max_rows + 1):
+        for c in range(1, 7):
             ws.cell(row=r, column=c).value = None
 
-    for c, col_name in enumerate(df6.columns, start=1):
-        ws.cell(row=1, column=c, value=str(col_name))
+    # header
+    for c, name in enumerate(df6.columns, start=1):
+        ws.cell(row=1, column=c, value=str(name))
 
+    # dados
     for r_idx, row in enumerate(df6.itertuples(index=False), start=2):
         for c_idx, val in enumerate(row, start=1):
             ws.cell(row=r_idx, column=c_idx, value=val)
 
     wb.save(PLANILHA_MAE_PATH)
 
-# ----------------------- MAIN -----------------------
+# ================= MAIN =================
 if __name__ == "__main__":
     m, y = mes_ano_anterior()
-    print(f"✔ Vou baixar exatamente (mês anterior): {m:02d}/{y}")
+    print(f"✔ Baixando mês anterior: {m:02d}/{y}")
 
-    print("📥 Baixando Mercado Secundário em memória...")
+    print("📥 Download em memória...")
     xls_bytes = baixar_mes_anterior_em_memoria()
 
-    print("📊 Lendo retorno em memória (XLS/HTML)...")
+    print("📊 Lendo dados...")
     df = ler_xls_em_memoria(xls_bytes)
 
-    print(f"📄 Colando A:F na planilha-mãe ({PLANILHA_MAE_PATH}) na aba '{ABA_DESTINO}'...")
+    print("📄 Colando colunas A–F (C/D/E normalizadas)...")
     colar_A_F_na_planilha_mae(df)
 
-    print("✅ Concluído: colunas A-F atualizadas na aba 'python'.")
+    print("✅ Concluído com sucesso.")
+
