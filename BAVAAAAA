@@ -1,0 +1,42 @@
+Option Explicit
+
+Sub Atualizar_Consolidado_Trimestral()
+
+    Dim wb As Workbook
+    Dim wsCon As Worksheet, wsPy As Worksheet
+    Dim linhas As Variant
+    Dim i As Long
+    
+    Set wb = ThisWorkbook
+    Set wsCon = wb.Worksheets("CONSOLIDADO TRIMESTRAL")
+    Set wsPy = wb.Worksheets("python")
+    
+    ' 1) "Abrir" a coluna E deslocando para a direita (inserir célula na coluna E)
+    '    somente nas linhas: 8 9 10 11 12 15 16
+    linhas = Array(8, 9, 10, 11, 12, 15, 16)
+    Application.ScreenUpdating = False
+    
+    For i = LBound(linhas) To UBound(linhas)
+        wsCon.Cells(linhas(i), "E").Insert Shift:=xlShiftToRight
+    Next i
+    
+    ' 2) Colagens / mapeamento
+    ' python!J3  -> consolidado!E15
+    wsCon.Range("E15").Value = wsPy.Range("J3").Value
+    
+    ' python!J4  -> consolidado!E16
+    wsCon.Range("E16").Value = wsPy.Range("J4").Value
+    
+    ' python!D3  -> consolidado!E9 (dividido por 1000)
+    If IsNumeric(wsPy.Range("D3").Value) And wsPy.Range("D3").Value <> "" Then
+        wsCon.Range("E9").Value = CDbl(wsPy.Range("D3").Value) / 1000
+    Else
+        wsCon.Range("E9").Value = wsPy.Range("D3").Value 'se vier texto, copia como está
+    End If
+    
+    ' python!E3  -> consolidado!E11
+    wsCon.Range("E11").Value = wsPy.Range("E3").Value
+    
+    Application.ScreenUpdating = True
+
+End Sub
