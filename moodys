@@ -52,12 +52,6 @@ def fmt_ordinal_pt(num: str, suf: str) -> str:
 
 
 def ajustar_coluna_e(s: str) -> str:
-    """
-    Regras coluna E:
-    1) Garantir ordinal na emissão no começo: "4 Emissão..." -> "4ª Emissão..."
-    2) Garantir ordinal na série: "- 1a Série" / "– 1a Série" -> "– 1ª Série"
-    3) Se terminar exatamente com "Emissão de Debêntures", acrescentar " – Série Única"
-    """
     if s is None:
         return ""
     s = " ".join(str(s).strip().split())
@@ -99,16 +93,6 @@ def ajustar_coluna_e(s: str) -> str:
 
 
 def padronizar_coluna_b(s: str) -> str:
-    """
-    Coluna B (a partir da linha 2):
-    deixar APENAS:
-      - "Empresas Não-Financeiras"
-      - "Projetos de Infraestrutura"
-
-    Heurística:
-      - se o texto tiver "infra" -> Projetos de Infraestrutura
-      - caso contrário -> Empresas Não-Financeiras
-    """
     txt = norm_text(s)
     if "infra" in txt:
         return "Projetos de Infraestrutura"
@@ -163,7 +147,8 @@ def main():
         ws_out.cell(row=r, column=1).value = f'=C{r}&" "&E{r}'
 
     # 4) FILTRO (APENAS coluna E)
-    #    -> remover linhas (a partir da linha 2) se coluna E NÃO contiver "debenture" (variações/acentos ok)
+    #    -> remove linhas (a partir da linha 2) se coluna E NÃO contiver "debenture" (variações/acentos ok)
+    #    ✅ NENHUM filtro na coluna D (nova D / original C)
     target_sub = "debenture"
     for r in range(ws_out.max_row, 1, -1):
         e_val = norm_text(ws_out.cell(row=r, column=5).value)  # E
@@ -203,4 +188,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
