@@ -101,65 +101,75 @@ def autofit_columns(ws):
         ws.column_dimensions[col_letter].width = max_len + 2
 
 
+def preencher_concat_em_todas_as_linhas(ws):
+    """
+    Garante que em cada linha r:
+      A(r) = C(r) & " " & E(r)
+    Importante: fazer ISSO DEPOIS dos filtros/exclusões,
+    para não ficar desalinhado quando linhas forem deletadas.
+    """
+    last = ws.max_row
+    if last >= 2:
+        ws["A2"].value = '=C2&" "&E2'
+        for r in range(3, last + 1):
+            ws.cell(row=r, column=1).value = f'=C{r}&" "&E{r}'
+
+
 def main():
     src_path = SOURCE_PATH.strip() or find_latest_in_downloads(FILENAME_PREFIX)
     print("📄 Fonte:", src_path)
 
     wb_src = load_workbook(src_path, data_only=False)
+    if SHEET_NAME not in wb_src.sheetnames:
+        raise RuntimeError(f"Aba '{SHEET_NAME}' não existe. Abas: {wb_src.sheetnames}")
     ws_src = wb_src[SHEET_NAME]
 
     wb_out = Workbook()
     ws_out = wb_out.active
     ws_out.title = SHEET_NAME
 
-    # 1) Copiar da linha 4 pra baixo
+    # 1) Copiar da linha 4 pra baixo (linha 4 vira linha 1)
     out_r = 1
     for r in range(4, ws_src.max_row + 1):
         for c in range(1, ws_src.max_column + 1):
             ws_out.cell(row=out_r, column=c).value = ws_src.cell(row=r, column=c).value
         out_r += 1
 
-    # 2) Inserir nova coluna A
+    # 2) Inserir nova coluna A (desloca tudo 1 pra direita)
     ws_out.insert_cols(1)
 
-    # 3) Concatenar C + espaço + E
-    ws_out["A2"].value = '=C2&" "&E2'
-    for r in range(3, ws_out.max_row + 1):
-        ws_out.cell(row=r, column=1).value = f'=C{r}&" "&E{r}'
-
-    # 4) FILTRO COLUNA E (Debêntures)
+    # 3) FILTRO COLUNA E (Debêntures) — apaga linha inteira
     for r in range(ws_out.max_row, 1, -1):
-        e_val = norm_text(ws_out.cell(row=r, column=5).value)
+        e_val = norm_text(ws_out.cell(row=r, column=5).value)  # E
         if "debenture" not in e_val:
             ws_out.delete_rows(r, 1)
 
-    # 5) FILTRO COLUNA B (somente dois valores permitidos)
+    # 4) FILTRO COLUNA B (somente dois valores permitidos) — apaga linha inteira
     permitidos = {
         norm_text("Projetos de Infraestrutura"),
         norm_text("Empresas Não-Financeiras"),
     }
-
     for r in range(ws_out.max_row, 1, -1):
-        b_val = norm_text(ws_out.cell(row=r, column=2).value)
+        b_val = norm_text(ws_out.cell(row=r, column=2).value)  # B
         if b_val not in permitidos:
             ws_out.delete_rows(r, 1)
 
-    # 6) Limpar texto da coluna C (exceto 250–252)
+    # 5) LIMPAR COLUNA C (texto), exceto linhas 250–252 (na planilha final)
     excecoes = {250, 251, 252}
     for r in range(1, ws_out.max_row + 1):
         if r in excecoes:
             continue
-        ws_out.cell(row=r, column=3).value = limpar_coluna_c_texto(
-            ws_out.cell(row=r, column=3).value
-        )
+        ws_out.cell(row=r, column=3).value = limpar_coluna_c_texto(ws_out.cell(row=r, column=3).value)
 
-    # 7) Ajustar texto da coluna E
+    # 6) AJUSTAR COLUNA E (emissão + série + série única)
     for r in range(1, ws_out.max_row + 1):
-        ws_out.cell(row=r, column=5).value = ajustar_coluna_e(
-            ws_out.cell(row=r, column=5).value
-        )
+        ws_out.cell(row=r, column=5).value = ajustar_coluna_e(ws_out.cell(row=r, column=5).value)
 
-    # 8) AutoFit
+    # 7) CONCATENAÇÃO (FAZER POR ÚLTIMO ENTRE AS TRANSFORMAÇÕES)
+    #    para garantir que linha 16 concatena C16/E16 (e não outra)
+    preencher_concat_em_todas_as_linhas(ws_out)
+
+    # 8) AutoFit DEPOIS DE TUDO (última etapa antes de salvar)
     autofit_columns(ws_out)
 
     wb_out.save(OUT_PATH)
@@ -168,3 +178,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
