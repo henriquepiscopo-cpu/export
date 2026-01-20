@@ -35,8 +35,8 @@ def limpar_coluna_c_texto(s: str) -> str:
     if s is None:
         return ""
     s = str(s)
-    s = re.sub(r"\s*\([^)]*\)", "", s)          # remove ( ... )
-    s = re.split(r"\s-\s", s, maxsplit=1)[0]    # remove " - ..." à direita
+    s = re.sub(r"\s*\([^)]*\)", "", s)
+    s = re.split(r"\s-\s", s, maxsplit=1)[0]
     s = " ".join(s.strip().split())
     return s
 
@@ -58,10 +58,8 @@ def ajustar_coluna_e(s: str) -> str:
     if s == "":
         return ""
 
-    # padroniza hífen com espaços para EN DASH
     s = re.sub(r"\s-\s", " – ", s)
 
-    # 1) "4 Emissão" / "4a Emissão" / "4ª Emissão" -> "4ª Emissão"
     s = re.sub(
         r"^(\d+)\s*([ªaºo])?\s+(Emiss[aã]o\b)",
         lambda m: f"{m.group(1)}ª {m.group(3)}",
@@ -69,7 +67,6 @@ def ajustar_coluna_e(s: str) -> str:
         flags=re.I
     )
 
-    # 2) "... – 1a Série" -> "... – 1ª Série"
     def repl_serie(m):
         num = m.group(1)
         suf = m.group(2) or ""
@@ -84,19 +81,11 @@ def ajustar_coluna_e(s: str) -> str:
         flags=re.I
     )
 
-    # 3) Se terminar com "Emissão de Debêntures", acrescenta " – Série Única"
     s_norm = norm_text(s)
     if s_norm.endswith("emissao de debentures") and ("serie unica" not in s_norm):
         s = s + " – Série Única"
 
     return s
-
-
-def padronizar_coluna_b(s: str) -> str:
-    txt = norm_text(s)
-    if "infra" in txt:
-        return "Projetos de Infraestrutura"
-    return "Empresas Não-Financeiras"
 
 
 def autofit_columns(ws):
@@ -105,7 +94,7 @@ def autofit_columns(ws):
         col_letter = col_cells[0].column_letter
         for cell in col_cells:
             try:
-                if cell.value is not None and str(cell.value) != "":
+                if cell.value not in (None, ""):
                     max_len = max(max_len, len(str(cell.value)))
             except Exception:
                 pass
@@ -117,69 +106,60 @@ def main():
     print("📄 Fonte:", src_path)
 
     wb_src = load_workbook(src_path, data_only=False)
-    if SHEET_NAME not in wb_src.sheetnames:
-        raise RuntimeError(f"Aba '{SHEET_NAME}' não existe. Abas: {wb_src.sheetnames}")
-
     ws_src = wb_src[SHEET_NAME]
-    max_row = ws_src.max_row
-    max_col = ws_src.max_column
-    if max_row < 4:
-        raise RuntimeError("A planilha tem menos de 4 linhas; não dá para copiar a partir da linha 4.")
 
     wb_out = Workbook()
     ws_out = wb_out.active
     ws_out.title = SHEET_NAME
 
-    # 1) Copiar da linha 4 pra baixo, linha 4 vira linha 1
+    # 1) Copiar da linha 4 pra baixo
     out_r = 1
-    for r in range(4, max_row + 1):
-        for c in range(1, max_col + 1):
+    for r in range(4, ws_src.max_row + 1):
+        for c in range(1, ws_src.max_column + 1):
             ws_out.cell(row=out_r, column=c).value = ws_src.cell(row=r, column=c).value
         out_r += 1
 
-    # 2) Deslocar uma coluna para a direita (insere nova coluna A)
+    # 2) Inserir nova coluna A
     ws_out.insert_cols(1)
 
-    # 3) A2 = concat (nova C com nova E) COM ESPAÇO + puxar para baixo
+    # 3) Concatenar C + espaço + E
     ws_out["A2"].value = '=C2&" "&E2'
-    last = ws_out.max_row
-    for r in range(3, last + 1):
+    for r in range(3, ws_out.max_row + 1):
         ws_out.cell(row=r, column=1).value = f'=C{r}&" "&E{r}'
 
-    # 4) FILTRO (APENAS coluna E)
-    #    -> remove linhas (a partir da linha 2) se coluna E NÃO contiver "debenture" (variações/acentos ok)
-    #    ✅ NENHUM filtro na coluna D (nova D / original C)
-    target_sub = "debenture"
+    # 4) FILTRO COLUNA E (Debêntures)
     for r in range(ws_out.max_row, 1, -1):
-        e_val = norm_text(ws_out.cell(row=r, column=5).value)  # E
-        if r >= 2 and (target_sub not in e_val):
+        e_val = norm_text(ws_out.cell(row=r, column=5).value)
+        if "debenture" not in e_val:
             ws_out.delete_rows(r, 1)
 
-    # 5) Coluna B (a partir da linha 2): padronizar para 2 categorias
-    last = ws_out.max_row
-    for r in range(2, last + 1):
-        ws_out.cell(row=r, column=2).value = padronizar_coluna_b(ws_out.cell(row=r, column=2).value)
+    # 5) FILTRO COLUNA B (somente dois valores permitidos)
+    permitidos = {
+        norm_text("Projetos de Infraestrutura"),
+        norm_text("Empresas Não-Financeiras"),
+    }
 
-    # 6) LIMPAR COLUNA C (texto), exceto linhas 250-252 (na planilha final)
+    for r in range(ws_out.max_row, 1, -1):
+        b_val = norm_text(ws_out.cell(row=r, column=2).value)
+        if b_val not in permitidos:
+            ws_out.delete_rows(r, 1)
+
+    # 6) Limpar texto da coluna C (exceto 250–252)
     excecoes = {250, 251, 252}
-    last = ws_out.max_row
-    for r in range(1, last + 1):
+    for r in range(1, ws_out.max_row + 1):
         if r in excecoes:
             continue
-        val = ws_out.cell(row=r, column=3).value  # C
-        if val is None or str(val).strip() == "":
-            continue
-        ws_out.cell(row=r, column=3).value = limpar_coluna_c_texto(val)
+        ws_out.cell(row=r, column=3).value = limpar_coluna_c_texto(
+            ws_out.cell(row=r, column=3).value
+        )
 
-    # 7) AJUSTAR COLUNA E (emissão + série + série única)
-    last = ws_out.max_row
-    for r in range(1, last + 1):
-        val = ws_out.cell(row=r, column=5).value  # E
-        if val is None or str(val).strip() == "":
-            continue
-        ws_out.cell(row=r, column=5).value = ajustar_coluna_e(val)
+    # 7) Ajustar texto da coluna E
+    for r in range(1, ws_out.max_row + 1):
+        ws_out.cell(row=r, column=5).value = ajustar_coluna_e(
+            ws_out.cell(row=r, column=5).value
+        )
 
-    # 8) AutoFit column widths na planilha toda
+    # 8) AutoFit
     autofit_columns(ws_out)
 
     wb_out.save(OUT_PATH)
