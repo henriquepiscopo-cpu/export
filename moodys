@@ -5,7 +5,7 @@ import unicodedata
 from openpyxl import load_workbook, Workbook
 
 # ================= CONFIG (AJUSTE AQUI) =================
-SOURCE_PATH = ""  # ex: r"C:\Users\...\Downloads\MOODYS_LOCAL_BRAZIL_20260119_000238.xlsx"
+SOURCE_PATH = ""  # ex: r"/Users/henriquepiscopo/Downloads/MOODYS_LOCAL_BRAZIL_20260119_000238.xlsx"
 SHEET_NAME = "ML Brazil"
 OUT_PATH = os.path.join(os.path.expanduser("~"), "Downloads", "MOODYS_LOCAL_BRAZIL_tratado.xlsx")
 FILENAME_PREFIX = "MOODYS_LOCAL_BRAZIL_"
@@ -55,7 +55,7 @@ def ajustar_coluna_e(s: str) -> str:
     """
     Regras coluna E:
     1) Garantir ordinal na emissão no começo: "4 Emissão..." -> "4ª Emissão..."
-    2) Garantir ordinal na série: "- 1a Série" / "– 1a Série" / "- 1ª Série" -> "– 1ª Série"
+    2) Garantir ordinal na série: "- 1a Série" / "– 1a Série" -> "– 1ª Série"
     3) Se terminar exatamente com "Emissão de Debêntures", acrescentar " – Série Única"
     """
     if s is None:
@@ -67,7 +67,7 @@ def ajustar_coluna_e(s: str) -> str:
     # padroniza hífen com espaços para EN DASH
     s = re.sub(r"\s-\s", " – ", s)
 
-    # 1) Corrigir ordinal no começo: "4 Emissão" / "4a Emissão" / "4ª Emissão"
+    # 1) "4 Emissão" / "4a Emissão" / "4ª Emissão" -> "4ª Emissão"
     s = re.sub(
         r"^(\d+)\s*([ªaºo])?\s+(Emiss[aã]o\b)",
         lambda m: f"{m.group(1)}ª {m.group(3)}",
@@ -75,7 +75,7 @@ def ajustar_coluna_e(s: str) -> str:
         flags=re.I
     )
 
-    # 2) Corrigir ordinal na série
+    # 2) "... – 1a Série" -> "... – 1ª Série"
     def repl_serie(m):
         num = m.group(1)
         suf = m.group(2) or ""
@@ -98,8 +98,24 @@ def ajustar_coluna_e(s: str) -> str:
     return s
 
 
+def padronizar_coluna_b(s: str) -> str:
+    """
+    Coluna B (a partir da linha 2):
+    deixar APENAS:
+      - "Empresas Não-Financeiras"
+      - "Projetos de Infraestrutura"
+
+    Heurística:
+      - se o texto tiver "infra" -> Projetos de Infraestrutura
+      - caso contrário -> Empresas Não-Financeiras
+    """
+    txt = norm_text(s)
+    if "infra" in txt:
+        return "Projetos de Infraestrutura"
+    return "Empresas Não-Financeiras"
+
+
 def autofit_columns(ws):
-    # AutoFit simples via cálculo de largura por conteúdo
     for col_cells in ws.columns:
         max_len = 0
         col_letter = col_cells[0].column_letter
@@ -146,23 +162,20 @@ def main():
     for r in range(3, last + 1):
         ws_out.cell(row=r, column=1).value = f'=C{r}&" "&E{r}'
 
-    # 4) FILTROS / EXCLUSÕES (coluna D e E)
-    keep_d = norm_text("Rating de Dívida")
+    # 4) FILTRO (APENAS coluna E)
+    #    -> remover linhas (a partir da linha 2) se coluna E NÃO contiver "debenture" (variações/acentos ok)
     target_sub = "debenture"
-
     for r in range(ws_out.max_row, 1, -1):
-        d_val = norm_text(ws_out.cell(row=r, column=4).value)  # D
         e_val = norm_text(ws_out.cell(row=r, column=5).value)  # E
-
-        if d_val != keep_d:
-            ws_out.delete_rows(r, 1)
-            continue
-
         if r >= 2 and (target_sub not in e_val):
             ws_out.delete_rows(r, 1)
-            continue
 
-    # 5) LIMPAR COLUNA C (texto), exceto linhas 250-252 (na planilha final)
+    # 5) Coluna B (a partir da linha 2): padronizar para 2 categorias
+    last = ws_out.max_row
+    for r in range(2, last + 1):
+        ws_out.cell(row=r, column=2).value = padronizar_coluna_b(ws_out.cell(row=r, column=2).value)
+
+    # 6) LIMPAR COLUNA C (texto), exceto linhas 250-252 (na planilha final)
     excecoes = {250, 251, 252}
     last = ws_out.max_row
     for r in range(1, last + 1):
@@ -173,7 +186,7 @@ def main():
             continue
         ws_out.cell(row=r, column=3).value = limpar_coluna_c_texto(val)
 
-    # 6) AJUSTAR COLUNA E (emissão + série + série única)
+    # 7) AJUSTAR COLUNA E (emissão + série + série única)
     last = ws_out.max_row
     for r in range(1, last + 1):
         val = ws_out.cell(row=r, column=5).value  # E
@@ -181,7 +194,7 @@ def main():
             continue
         ws_out.cell(row=r, column=5).value = ajustar_coluna_e(val)
 
-    # 7) AutoFit column widths na planilha toda
+    # 8) AutoFit column widths na planilha toda
     autofit_columns(ws_out)
 
     wb_out.save(OUT_PATH)
@@ -190,3 +203,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
