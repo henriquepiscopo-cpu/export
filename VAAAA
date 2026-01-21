@@ -1,33 +1,45 @@
 Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
 
     Dim wsOrigem As Worksheet
+    Dim wsPrazo As Worksheet
     Dim wsDestino As Worksheet
+
     Dim lastRowOrigem As Long
-    Dim lastRowDestino As Long
+    Dim lastRowPrazo As Long
+
+    Dim nextRowB As Long
+    Dim nextRowQ As Long
+    Dim targetRow As Long
+
     Dim c As Long
+    Dim prazoValor As Variant
 
     ' Define as abas
     Set wsOrigem = ThisWorkbook.Worksheets("Volume")
     Set wsDestino = ThisWorkbook.Worksheets("Deb, CRICRA FII Fiagro (Mensal)")
 
-    ' Última linha com dados na coluna B da aba Volume
+    ' Aba de prazo (nome exatamente como você pediu)
+    ' (Se no seu arquivo estiver sem ponto no final, troque aqui.)
+    Set wsPrazo = ThisWorkbook.Worksheets("Prazo Médio não Inc")
+
+    ' ========= 1) ACHA LINHA DE DESTINO (baseada em B e Q) =========
+    nextRowB = wsDestino.Cells(wsDestino.Rows.Count, "B").End(xlUp).Row + 1
+    nextRowQ = wsDestino.Cells(wsDestino.Rows.Count, "Q").End(xlUp).Row + 1
+
+    ' Usa a próxima linha disponível considerando as duas colunas
+    targetRow = Application.WorksheetFunction.Max(nextRowB, nextRowQ)
+
+    ' ========= 2) VOLUME: COPIA ÚLTIMA LINHA B:P =========
     lastRowOrigem = wsOrigem.Cells(wsOrigem.Rows.Count, "B").End(xlUp).Row
 
-    ' Próxima linha vazia na coluna B da aba Destino
-    lastRowDestino = wsDestino.Cells(wsDestino.Rows.Count, "B").End(xlUp).Row + 1
-
-    ' Copia B:P da última linha da aba Volume
     wsOrigem.Range("B" & lastRowOrigem & ":P" & lastRowOrigem).Copy
-
-    ' Cola apenas valores em B:P da linha nova
-    wsDestino.Range("B" & lastRowDestino).PasteSpecial Paste:=xlPasteValues
-
+    wsDestino.Range("B" & targetRow).PasteSpecial Paste:=xlPasteValues
     Application.CutCopyMode = False
 
-    ' ===== TRATAMENTOS =====
+    ' ===== TRATAMENTOS (B e C:P) =====
 
     ' Coluna B → forçar como data (mês/ano) no formato "nov-25"
-    With wsDestino.Cells(lastRowDestino, "B")
+    With wsDestino.Cells(targetRow, "B")
         If IsDate(.Value) Then
             .Value = DateSerial(Year(CDate(.Value)), Month(CDate(.Value)), 1)
             .NumberFormat = "mmm-yy"
@@ -36,15 +48,19 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
 
     ' Colunas C até P → dividir por 1.000.000.000
     For c = wsDestino.Range("C1").Column To wsDestino.Range("P1").Column
-        With wsDestino.Cells(lastRowDestino, c)
+        With wsDestino.Cells(targetRow, c)
             If IsNumeric(.Value) And Not IsEmpty(.Value) Then
                 .Value = .Value / 1000000000#
             End If
         End With
     Next c
 
-    MsgBox "Dados copiados e tratados com sucesso!", vbInformation
+    ' ========= 3) PRAZO: PEGA ÚLTIMA LINHA E COLA COLUNA Q =========
+    lastRowPrazo = wsPrazo.Cells(wsPrazo.Rows.Count, "B").End(xlUp).Row
+    prazoValor = wsPrazo.Cells(lastRowPrazo, "C").Value
+
+    wsDestino.Cells(targetRow, "Q").Value = prazoValor
+
+    MsgBox "Dados copiados e tratados com sucesso! (B:P + Q)", vbInformation
 
 End Sub
-
-
