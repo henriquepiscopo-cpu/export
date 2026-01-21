@@ -15,11 +15,13 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
     Dim c As Long
     Dim prazoValor As Variant
 
-    ' ===== Abas =====
+    ' ===== Abas (NOMES EXATOS) =====
     Set wsVol = ThisWorkbook.Worksheets("Volume")
     Set wsPrazo = ThisWorkbook.Worksheets("Prazo Médio não Inc")
-    Set wsEnc = ThisWorkbook.Worksheets("12.431 V Encerrados") ' <- sem ponto
     Set wsDest = ThisWorkbook.Worksheets("Deb, CRICRA FII Fiagro (Mensal)")
+
+    ' Nome correto informado por você:
+    Set wsEnc = ThisWorkbook.Worksheets("12 431 V Encerrados")
 
     ' =========================================================
     ' ACHA LINHA ÚNICA DE DESTINO (mesma linha para tudo)
@@ -97,6 +99,10 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
             End If
         End With
     Next c
+
+    MsgBox "Concluído: Volume (B:P), Prazo (Q) e Encerrados (S:U) na mesma linha!", vbInformation
+
+End Sub
 
     MsgBox "Concluído: Volume (B:P), Prazo (Q) e Encerrados (S:U) na mesma linha!", vbInformation
 
