@@ -1,0 +1,298 @@
+import os
+import re
+import certifi
+import tempfile
+import requests
+from datetime import datetime, date
+from urllib.parse import urljoin
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+from openpyxl import load_workbook, Workbook
+from copy import copy
+
+# ================= CONFIG =================
+STRAPI_BASE = "https://data-strapi.prd.anbima.com.br"
+TIMEOUT = (10, 120)
+
+# Pasta onde o arquivo FINAL filtrado será salvo
+OUTPUT_DIR = os.getcwd()  # ex: r"C:\Users\...\Documents" ou "/Users/henriquepiscopo/Downloads"
+
+# Coleção Strapi (já sabemos que funcionou no seu caso)
+COLLECTION = "boletim-mercado-de-capitais"
+
+HEADERS = {
+    "User-Agent": "Mozilla/5.0",
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
+    "Origin": "https://data.anbima.com.br",
+    "Referer": "https://data.anbima.com.br/",
+    "Cache-Control": "no-cache",
+    "Pragma": "no-cache",
+}
+
+# Mapeia nomes de meses que podem aparecer no slug/título/nome do arquivo
+MESES = {
+    1: ["janeiro", "jan"],
+    2: ["fevereiro", "fev"],
+    3: ["marco", "março", "mar"],
+    4: ["abril", "abr"],
+    5: ["maio", "mai"],
+    6: ["junho", "jun"],
+    7: ["julho", "jul"],
+    8: ["agosto", "ago"],
+    9: ["setembro", "set"],
+    10: ["outubro", "out"],
+    11: ["novembro", "nov"],
+    12: ["dezembro", "dez"],
+}
+
+# ====== ABAS A MANTER: (aba_origem) -> (nome_novo) ======
+SHEETS_MAP = [
+    ("02-02-Vlr", "Volume"),
+    ("08-02-Prz", "Prazo Médio não Inc."),
+    ("09-01-Vlr-Ofe", "12.431 V. Encerrados"),
+    ("09-03-Prz", "12.431 Prazo Médio"),
+    ("08-05-Vlr-Det", "Ofer. Detentor N Inc."),
+    ("09-06-Vlr-Det", "12.431 Ofer. Detentor"),
+    ("08-04-Vlr-Des", "Dest. Recursos"),
+]
+# =========================================
+
+
+def build_session() -> requests.Session:
+    s = requests.Session()
+    retry = Retry(
+        total=5,
+        backoff_factor=0.8,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["GET"],
+        raise_on_status=False,
+    )
+    s.mount("https://", HTTPAdapter(max_retries=retry))
+    return s
+
+
+def texto_contem_mes(texto: str, mes_num: int) -> bool:
+    if not texto:
+        return False
+    t = texto.lower()
+    return any(m in t for m in MESES[mes_num])
+
+
+def parse_published_at(published_at: str) -> date | None:
+    """
+    Ex: 2025-12-18T13:19:14.632Z
+    """
+    if not published_at:
+        return None
+    try:
+        s = published_at.strip()
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        dt = datetime.fromisoformat(s)
+        return dt.date()
+    except Exception:
+        return None
+
+
+def mes_ano_anterior(m: int, y: int) -> tuple[int, int]:
+    if m == 1:
+        return 12, y - 1
+    return m - 1, y
+
+
+def extrair_campos_para_validacao(item: dict) -> dict:
+    """
+    Pega slug/titulo/nome/url do attachment do JSON (sem quebrar se faltar campo).
+    """
+    attrs = item.get("attributes") or {}
+    template = attrs.get("template") or {}
+
+    slug = template.get("slug") or attrs.get("slug") or ""
+    titulo = (
+        template.get("title")
+        or template.get("titulo")
+        or attrs.get("title")
+        or attrs.get("titulo")
+        or ""
+    )
+
+    att_data = None
+    try:
+        att_data = template["attachment"]["data"]
+        if isinstance(att_data, list):
+            att_data = att_data[0] if att_data else None
+    except Exception:
+        att_data = None
+
+    att_name = ""
+    att_url = ""
+    if isinstance(att_data, dict):
+        att_attrs = att_data.get("attributes") or {}
+        att_name = att_attrs.get("name") or ""
+        att_url = att_attrs.get("url") or ""
+
+    return {
+        "slug": slug,
+        "titulo": titulo,
+        "att_name": att_name,
+        "att_url": att_url,
+        "publishedAt": attrs.get("publishedAt") or "",
+    }
+
+
+def get_latest_item_with_xlsx(session: requests.Session) -> dict:
+    """
+    Pega os itens mais recentes da collection e retorna o primeiro com attachment .xlsx.
+    """
+    url = f"{STRAPI_BASE}/api/{COLLECTION}"
+    params = {
+        "locale": "pt-BR",
+        "sort": "publishedAt:desc",
+        "pagination[pageSize]": "30",
+        "populate": "template.attachment",
+    }
+
+    r = session.get(url, headers=HEADERS, params=params, timeout=TIMEOUT, verify=certifi.where())
+    r.raise_for_status()
+
+    data = (r.json() or {}).get("data", []) or []
+    for item in data:
+        campos = extrair_campos_para_validacao(item)
+        att_url = campos["att_url"]
+        if isinstance(att_url, str) and att_url.lower().endswith(".xlsx"):
+            return item
+
+    raise RuntimeError("Não encontrei nenhum item recente com attachment .xlsx nessa collection.")
+
+
+def download_file(session: requests.Session, file_url: str, out_path: str):
+    if file_url.startswith("/"):
+        file_url = urljoin(STRAPI_BASE, file_url)
+
+    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+
+    with session.get(
+        file_url,
+        headers={"User-Agent": HEADERS["User-Agent"], "Accept": "*/*"},
+        stream=True,
+        timeout=TIMEOUT,
+        verify=certifi.where(),
+    ) as r:
+        r.raise_for_status()
+        with open(out_path, "wb") as f:
+            for chunk in r.iter_content(1024 * 256):
+                if chunk:
+                    f.write(chunk)
+
+
+def _copy_sheet(src_ws, dst_ws):
+    """
+    Copia células + estilos básicos + dimensões + merges.
+    (Para dados/tabelas isso funciona bem. Objetos complexos como gráficos podem não copiar 1:1.)
+    """
+    # dimensões
+    for col_letter, dim in src_ws.column_dimensions.items():
+        dst_ws.column_dimensions[col_letter].width = dim.width
+    for row_idx, dim in src_ws.row_dimensions.items():
+        dst_ws.row_dimensions[row_idx].height = dim.height
+
+    # congelamento
+    dst_ws.freeze_panes = src_ws.freeze_panes
+
+    max_row = src_ws.max_row or 1
+    max_col = src_ws.max_column or 1
+
+    for r in range(1, max_row + 1):
+        for c in range(1, max_col + 1):
+            s = src_ws.cell(row=r, column=c)
+            d = dst_ws.cell(row=r, column=c)
+
+            d.value = s.value
+
+            if s.has_style:
+                d.font = copy(s.font)
+                d.border = copy(s.border)
+                d.fill = copy(s.fill)
+                d.number_format = s.number_format
+                d.protection = copy(s.protection)
+                d.alignment = copy(s.alignment)
+
+    for merged in src_ws.merged_cells.ranges:
+        dst_ws.merge_cells(str(merged))
+
+
+def gerar_arquivo_filtrado(xlsx_in_path: str, xlsx_out_path: str):
+    wb_in = load_workbook(xlsx_in_path, data_only=False)
+
+    wb_out = Workbook()
+    wb_out.remove(wb_out.active)
+
+    for src_name, new_name in SHEETS_MAP:
+        if src_name not in wb_in.sheetnames:
+            raise RuntimeError(
+                f"Aba '{src_name}' não encontrada no boletim.\n"
+                f"Abas existentes: {wb_in.sheetnames}"
+            )
+
+        src_ws = wb_in[src_name]
+        dst_ws = wb_out.create_sheet(title=new_name)
+        _copy_sheet(src_ws, dst_ws)
+
+    wb_out.save(xlsx_out_path)
+
+
+def main():
+    s = build_session()
+
+    item = get_latest_item_with_xlsx(s)
+    campos = extrair_campos_para_validacao(item)
+
+    pub_date = parse_published_at(campos["publishedAt"])
+    if not pub_date:
+        raise RuntimeError(f"Não consegui parsear publishedAt: {campos['publishedAt']}")
+
+    # mês de referência = publishedAt - 1 mês
+    mes_ref, ano_ref = mes_ano_anterior(pub_date.month, pub_date.year)
+
+    # valida mês pelo slug/titulo/nome do arquivo
+    base_text = " | ".join([campos["slug"], campos["titulo"], campos["att_name"]]).strip()
+    if not texto_contem_mes(base_text, mes_ref):
+        raise RuntimeError(
+            "O XLSX mais recente encontrado NÃO parece ser do mês de referência (publishedAt - 1 mês).\n"
+            f"- publishedAt (UTC): {campos['publishedAt']}\n"
+            f"- Mês/ano de referência esperado: {MESES[mes_ref][0]}/{ano_ref}\n"
+            f"- slug: {campos['slug']}\n"
+            f"- titulo: {campos['titulo']}\n"
+            f"- arquivo: {campos['att_name']}\n"
+            f"- url: {campos['att_url']}\n"
+        )
+
+    nome_mes = MESES[mes_ref][0]
+    final_name = f"Boletim_Mercado_Capitais_{nome_mes}_{ano_ref}.xlsx"
+    final_path = os.path.join(OUTPUT_DIR, final_name)
+
+    # baixa para arquivo temporário e só salva o filtrado no final
+    fd, tmp_path = tempfile.mkstemp(suffix=".xlsx")
+    os.close(fd)
+
+    try:
+        print(f"✅ OK: mês de referência bate ({nome_mes}/{ano_ref})")
+        print(f"⬇️ Baixando XLSX (temporário): {campos['att_url']}")
+        download_file(s, campos["att_url"], tmp_path)
+
+        print("🧹 Gerando arquivo filtrado (somente abas necessárias)...")
+        gerar_arquivo_filtrado(tmp_path, final_path)
+
+        print("✅ Filtrado salvo em:")
+        print(os.path.abspath(final_path))
+
+    finally:
+        try:
+            os.remove(tmp_path)
+        except Exception:
+            pass
+
+
+if __name__ == "__main__":
+    main()
