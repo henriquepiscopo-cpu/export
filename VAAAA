@@ -6,12 +6,14 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
     Dim wsPrazo As Worksheet
     Dim wsEnc As Worksheet
     Dim wsPrazo12431 As Worksheet
+    Dim wsOferDetNInc As Worksheet
     Dim wsDestino As Worksheet
 
     Dim lastRowOrigem As Long
     Dim lastRowPrazo As Long
     Dim lastRowEnc As Long
     Dim lastRowPrazo12431 As Long
+    Dim lastRowOferDetNInc As Long
 
     Dim nextRowB As Long
     Dim nextRowQ As Long
@@ -24,6 +26,7 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
 
     Dim arrVol As Variant
     Dim arrEnc As Variant
+    Dim arrOfer As Variant
 
     Dim oldCalc As XlCalculation
     Dim oldEvents As Boolean
@@ -45,7 +48,8 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
     Set wsDestino = ThisWorkbook.Worksheets("Deb, CRICRA FII Fiagro (Mensal)")
     Set wsPrazo = ThisWorkbook.Worksheets("Prazo Médio não Inc")
     Set wsEnc = ThisWorkbook.Worksheets("12 431 V  Encerrados")          ' ajuste se tiver 1 espaço só
-    Set wsPrazo12431 = ThisWorkbook.Worksheets("12 431 Prazo Médio")     ' NOVA
+    Set wsPrazo12431 = ThisWorkbook.Worksheets("12 431 Prazo Médio")
+    Set wsOferDetNInc = ThisWorkbook.Worksheets("Ofer  Detentor N Inc")  ' nome como você escreveu
 
     ' ========= 1) ACHA LINHA DE DESTINO (baseada em B, Q e S) =========
     nextRowB = wsDestino.Cells(wsDestino.Rows.Count, "B").End(xlUp).Row + 1
@@ -66,7 +70,7 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
         End If
     End With
 
-    ' Colunas C até P → dividir por 1.000.000.000
+    ' Colunas C:P → dividir por 1.000.000.000
     For c = wsDestino.Range("C1").Column To wsDestino.Range("P1").Column
         With wsDestino.Cells(targetRow, c)
             If IsNumeric(.Value) And Not IsEmpty(.Value) Then .Value = .Value / 1000000000#
@@ -118,7 +122,28 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
         PuxarFormulasLinha wsDestino, targetRow - 1, targetRow, "BR:BT"
     End If
 
-    MsgBox "OK! Atualizado (B:P + Q + S:U + AC + fórmulas).", vbInformation
+    ' ========= 7) Ofer Detentor N Inc: última linha pela COL B -> B:G em AE:AJ =========
+    lastRowOferDetNInc = wsOferDetNInc.Cells(wsOferDetNInc.Rows.Count, "B").End(xlUp).Row
+    arrOfer = wsOferDetNInc.Range("B" & lastRowOferDetNInc & ":G" & lastRowOferDetNInc).Value
+
+    wsDestino.Range("AE" & targetRow & ":AJ" & targetRow).Value = arrOfer
+
+    ' AE → data (mês/ano) "nov-25"
+    With wsDestino.Cells(targetRow, "AE")
+        If IsDate(.Value) Then
+            .Value = DateSerial(Year(CDate(.Value)), Month(CDate(.Value)), 1)
+            .NumberFormat = "mmm-yy"
+        End If
+    End With
+
+    ' AF:AJ → dividir por 1.000.000.000
+    For c = wsDestino.Range("AF1").Column To wsDestino.Range("AJ1").Column
+        With wsDestino.Cells(targetRow, c)
+            If IsNumeric(.Value) And Not IsEmpty(.Value) Then .Value = .Value / 1000000000#
+        End With
+    Next c
+
+    MsgBox "OK! Atualizado até Ofer Detentor N Inc (AE:AJ).", vbInformation
 
 CleanExit:
     Application.Calculation = oldCalc
@@ -135,7 +160,6 @@ EH:
 End Sub
 
 Private Sub PuxarFormulasLinha(ByVal ws As Worksheet, ByVal srcRow As Long, ByVal dstRow As Long, ByVal cols As String)
-    ' cols pode ser "V:AA" (intervalo) ou "AD" (coluna única)
     Dim p() As String
     Dim colStart As String, colEnd As String
     Dim addrSrc As String, addrDst As String
