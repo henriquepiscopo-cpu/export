@@ -3,11 +3,13 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
     Dim wsOrigem As Worksheet
     Dim wsPrazo As Worksheet
     Dim wsEnc As Worksheet
+    Dim wsPrazo12431 As Worksheet
     Dim wsDestino As Worksheet
 
     Dim lastRowOrigem As Long
     Dim lastRowPrazo As Long
     Dim lastRowEnc As Long
+    Dim lastRowPrazo12431 As Long
 
     Dim nextRowB As Long
     Dim nextRowQ As Long
@@ -16,6 +18,7 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
 
     Dim c As Long
     Dim prazoValor As Variant
+    Dim prazo12431Valor As Variant
 
     Dim arrVol As Variant
     Dim arrEnc As Variant
@@ -39,7 +42,8 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
     Set wsOrigem = ThisWorkbook.Worksheets("Volume")
     Set wsDestino = ThisWorkbook.Worksheets("Deb, CRICRA FII Fiagro (Mensal)")
     Set wsPrazo = ThisWorkbook.Worksheets("Prazo Médio não Inc")
-    Set wsEnc = ThisWorkbook.Worksheets("12 431 V  Encerrados") ' ajuste se tiver 1 espaço só
+    Set wsEnc = ThisWorkbook.Worksheets("12 431 V  Encerrados")          ' ajuste se tiver 1 espaço só
+    Set wsPrazo12431 = ThisWorkbook.Worksheets("12 431 Prazo Médio")     ' NOVA
 
     ' ========= 1) ACHA LINHA DE DESTINO (baseada em B, Q e S) =========
     nextRowB = wsDestino.Cells(wsDestino.Rows.Count, "B").End(xlUp).Row + 1
@@ -70,7 +74,7 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
         End With
     Next c
 
-    ' ========= 3) PRAZO: ÚLTIMA LINHA (pela B) COLUNA C -> COLUNA Q =========
+    ' ========= 3) PRAZO (não Inc): ÚLTIMA LINHA (pela B) COLUNA C -> COLUNA Q =========
     lastRowPrazo = wsPrazo.Cells(wsPrazo.Rows.Count, "B").End(xlUp).Row
     prazoValor = wsPrazo.Cells(lastRowPrazo, "C").Value
     wsDestino.Cells(targetRow, "Q").Value = prazoValor
@@ -108,7 +112,24 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
         End With
     Next c
 
-    MsgBox "Dados copiados e tratados com sucesso! (B:P + Q + Encerrados B:D -> S:U)", vbInformation
+    ' ========= 5) 12 431 Prazo Médio: última linha com dado na COLUNA C -> cola em AC =========
+    lastRowPrazo12431 = wsPrazo12431.Cells(wsPrazo12431.Rows.Count, "C").End(xlUp).Row
+    prazo12431Valor = wsPrazo12431.Cells(lastRowPrazo12431, "C").Value
+
+    wsDestino.Cells(targetRow, "AC").Value = prazo12431Valor
+
+    ' ========= 6) PUXAR FÓRMULAS ATÉ A LINHA DESTINO =========
+    ' Copia as fórmulas da linha anterior (targetRow-1) para targetRow
+    If targetRow > 2 Then
+        Call PuxarFormulasLinha(wsDestino, targetRow - 1, targetRow, "V:AA")
+        Call PuxarFormulasLinha(wsDestino, targetRow - 1, targetRow, "AD:AD")
+        Call PuxarFormulasLinha(wsDestino, targetRow - 1, targetRow, "AL:AP")
+        Call PuxarFormulasLinha(wsDestino, targetRow - 1, targetRow, "AY:AY")
+        Call PuxarFormulasLinha(wsDestino, targetRow - 1, targetRow, "BA:BD")
+        Call PuxarFormulasLinha(wsDestino, targetRow - 1, targetRow, "BR:BT")
+    End If
+
+    MsgBox "OK! Atualizado (B:P + Q + S:U + AC + fórmulas).", vbInformation
 
 CleanExit:
     Application.Calculation = oldCalc
@@ -122,5 +143,14 @@ EH:
     Application.ScreenUpdating = oldScreen
     MsgBox "Erro: " & Err.Number & " - " & Err.Description, vbCritical
 
+End Sub
+
+
+Private Sub PuxarFormulasLinha(ByVal ws As Worksheet, ByVal srcRow As Long, ByVal dstRow As Long, ByVal cols As String)
+    ' Copia somente fórmulas (não valores) da linha srcRow para dstRow no intervalo de colunas informado
+    Dim rngSrc As Range, rngDst As Range
+    Set rngSrc = ws.Range(cols & srcRow)
+    Set rngDst = ws.Range(cols & dstRow)
+    rngDst.FormulaR1C1 = rngSrc.FormulaR1C1
 End Sub
 
