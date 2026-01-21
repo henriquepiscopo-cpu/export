@@ -1,0 +1,29 @@
+Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
+
+    Dim wsOrigem As Worksheet
+    Dim wsDestino As Worksheet
+    Dim lastRowOrigem As Long
+    Dim lastRowDestino As Long
+
+    ' Define as abas
+    Set wsOrigem = ThisWorkbook.Worksheets("Volume")
+    Set wsDestino = ThisWorkbook.Worksheets("Deb, CRICRA FII Fiagro (Mensal)")
+
+    ' Última linha com dados na coluna B da aba Volume
+    lastRowOrigem = wsOrigem.Cells(wsOrigem.Rows.Count, "B").End(xlUp).Row
+
+    ' Última linha com dados na coluna B da aba Destino
+    lastRowDestino = wsDestino.Cells(wsDestino.Rows.Count, "B").End(xlUp).Row + 1
+
+    ' Copia B:P da última linha da aba Volume
+    wsOrigem.Range("B" & lastRowOrigem & ":P" & lastRowOrigem).Copy
+
+    ' Cola apenas valores em B:P da próxima linha vazia
+    wsDestino.Range("B" & lastRowDestino).PasteSpecial Paste:=xlPasteValues
+
+    ' Limpa clipboard
+    Application.CutCopyMode = False
+
+    MsgBox "Dados copiados com sucesso!", vbInformation
+
+End Sub
