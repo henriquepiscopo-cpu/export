@@ -9,13 +9,16 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
     Dim lastRowPrazo As Long
     Dim lastRowEnc As Long
 
-    Dim nextRowB As Long, nextRowQ As Long, nextRowS As Long
+    Dim nextRowB As Long
+    Dim nextRowQ As Long
+    Dim nextRowS As Long
     Dim targetRow As Long
 
+    Dim c As Long
     Dim prazoValor As Variant
+
     Dim arrVol As Variant
     Dim arrEnc As Variant
-    Dim c As Long, r As Long
 
     Dim oldCalc As XlCalculation
     Dim oldEvents As Boolean
@@ -23,7 +26,7 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
 
     On Error GoTo EH
 
-    ' ===== Performance / evita "piscar e sumir" =====
+    ' ===== Performance / evita evento interferindo =====
     oldCalc = Application.Calculation
     oldEvents = Application.EnableEvents
     oldScreen = Application.ScreenUpdating
@@ -36,21 +39,21 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
     Set wsOrigem = ThisWorkbook.Worksheets("Volume")
     Set wsDestino = ThisWorkbook.Worksheets("Deb, CRICRA FII Fiagro (Mensal)")
     Set wsPrazo = ThisWorkbook.Worksheets("Prazo Médio não Inc")
-    Set wsEnc = ThisWorkbook.Worksheets("12 431 V  Encerrados") ' <- 2 espaços
+    Set wsEnc = ThisWorkbook.Worksheets("12 431 V  Encerrados") ' ajuste se tiver 1 espaço só
 
     ' ========= 1) ACHA LINHA DE DESTINO (baseada em B, Q e S) =========
     nextRowB = wsDestino.Cells(wsDestino.Rows.Count, "B").End(xlUp).Row + 1
     nextRowQ = wsDestino.Cells(wsDestino.Rows.Count, "Q").End(xlUp).Row + 1
     nextRowS = wsDestino.Cells(wsDestino.Rows.Count, "S").End(xlUp).Row + 1
+
     targetRow = Application.WorksheetFunction.Max(nextRowB, nextRowQ, nextRowS)
 
-    ' ========= 2) VOLUME: ÚLTIMA LINHA PELA COLUNA B -> COLA B:P =========
+    ' ========= 2) VOLUME: COPIA ÚLTIMA LINHA B:P =========
     lastRowOrigem = wsOrigem.Cells(wsOrigem.Rows.Count, "B").End(xlUp).Row
-
     arrVol = wsOrigem.Range("B" & lastRowOrigem & ":P" & lastRowOrigem).Value
     wsDestino.Range("B" & targetRow & ":P" & targetRow).Value = arrVol
 
-    ' Coluna B → data mês/ano "nov-25"
+    ' Coluna B → data (mês/ano) "nov-25"
     With wsDestino.Cells(targetRow, "B")
         If IsDate(.Value) Then
             .Value = DateSerial(Year(CDate(.Value)), Month(CDate(.Value)), 1)
@@ -67,39 +70,28 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
         End With
     Next c
 
-    ' ========= 3) PRAZO: ÚLTIMA LINHA (pela B) COL C -> COLA Q =========
+    ' ========= 3) PRAZO: ÚLTIMA LINHA (pela B) COLUNA C -> COLUNA Q =========
     lastRowPrazo = wsPrazo.Cells(wsPrazo.Rows.Count, "B").End(xlUp).Row
     prazoValor = wsPrazo.Cells(lastRowPrazo, "C").Value
-
     wsDestino.Cells(targetRow, "Q").Value = prazoValor
+
+    ' Formata Q com 1 casa decimal
     With wsDestino.Cells(targetRow, "Q")
-        If IsNumeric(.Value) And Not IsEmpty(.Value) Then .NumberFormat = "0.0"
+        If IsNumeric(.Value) And Not IsEmpty(.Value) Then
+            .NumberFormat = "0.0"
+        End If
     End With
 
-    ' ========= 4) ENCERRADOS: ÚLTIMA LINHA "VÁLIDA" NA COLUNA B -> COLA S:U =========
-    lastRowEnc = 0
-    For r = wsEnc.Cells(wsEnc.Rows.Count, "B").End(xlUp).Row To 1 Step -1
-        If Trim$(CStr(wsEnc.Cells(r, "B").Value)) <> "" Then
-            ' se quiser ignorar "Total"/"Fonte", mantenha; senão pode remover
-            If LCase$(Trim$(CStr(wsEnc.Cells(r, "B").Value))) <> "total" _
-               And LCase$(Trim$(CStr(wsEnc.Cells(r, "B").Value))) <> "fonte" Then
-                lastRowEnc = r
-                Exit For
-            End If
-        End If
-    Next r
+    ' ========= 4) ENCERRADOS: ÚLTIMA LINHA (pela B) COPIA B:D -> COLA S:U =========
+    lastRowEnc = wsEnc.Cells(wsEnc.Rows.Count, "B").End(xlUp).Row
 
-    If lastRowEnc = 0 Then
-        MsgBox "Não achei nenhuma linha válida na coluna B da aba '12 431 V  Encerrados'.", vbCritical
-        GoTo CleanExit
-    End If
+    ' Fonte: B:D
+    arrEnc = wsEnc.Range("B" & lastRowEnc & ":D" & lastRowEnc).Value
 
-    arrEnc = wsEnc.Range("S" & lastRowEnc & ":U" & lastRowEnc).Value
-
-    ' Escreve direto (sem paste) — sobrescreve fórmula também
+    ' Destino: S:U
     wsDestino.Range("S" & targetRow & ":U" & targetRow).Value = arrEnc
 
-    ' Coluna S → data mês/ano "nov-25"
+    ' Coluna S → data (mês/ano) "nov-25"
     With wsDestino.Cells(targetRow, "S")
         If IsDate(.Value) Then
             .Value = DateSerial(Year(CDate(.Value)), Month(CDate(.Value)), 1)
@@ -116,7 +108,7 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
         End With
     Next c
 
-    MsgBox "Dados copiados e tratados com sucesso! (B:P + Q + S:U)", vbInformation
+    MsgBox "Dados copiados e tratados com sucesso! (B:P + Q + Encerrados B:D -> S:U)", vbInformation
 
 CleanExit:
     Application.Calculation = oldCalc
@@ -125,10 +117,10 @@ CleanExit:
     Exit Sub
 
 EH:
-    ' garante que volta ao normal mesmo com erro
     Application.Calculation = oldCalc
     Application.EnableEvents = oldEvents
     Application.ScreenUpdating = oldScreen
     MsgBox "Erro: " & Err.Number & " - " & Err.Description, vbCritical
 
 End Sub
+
