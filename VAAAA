@@ -4,6 +4,7 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
     Dim wsDestino As Worksheet
     Dim lastRowOrigem As Long
     Dim lastRowDestino As Long
+    Dim c As Long
 
     ' Define as abas
     Set wsOrigem = ThisWorkbook.Worksheets("Volume")
@@ -12,18 +13,37 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
     ' Última linha com dados na coluna B da aba Volume
     lastRowOrigem = wsOrigem.Cells(wsOrigem.Rows.Count, "B").End(xlUp).Row
 
-    ' Última linha com dados na coluna B da aba Destino
+    ' Próxima linha vazia na coluna B da aba Destino
     lastRowDestino = wsDestino.Cells(wsDestino.Rows.Count, "B").End(xlUp).Row + 1
 
     ' Copia B:P da última linha da aba Volume
     wsOrigem.Range("B" & lastRowOrigem & ":P" & lastRowOrigem).Copy
 
-    ' Cola apenas valores em B:P da próxima linha vazia
+    ' Cola apenas valores em B:P da linha nova
     wsDestino.Range("B" & lastRowDestino).PasteSpecial Paste:=xlPasteValues
 
-    ' Limpa clipboard
     Application.CutCopyMode = False
 
-    MsgBox "Dados copiados com sucesso!", vbInformation
+    ' ===== TRATAMENTOS =====
+
+    ' Coluna B → forçar como data
+    With wsDestino.Cells(lastRowDestino, "B")
+        If IsDate(.Value) Then
+            .Value = CDate(.Value)
+            .NumberFormat = "dd/mm/yyyy"
+        End If
+    End With
+
+    ' Colunas C até P → dividir por 1.000.000.000
+    For c = wsDestino.Range("C1").Column To wsDestino.Range("P1").Column
+        With wsDestino.Cells(lastRowDestino, c)
+            If IsNumeric(.Value) And Not IsEmpty(.Value) Then
+                .Value = .Value / 1000000000#
+            End If
+        End With
+    Next c
+
+    MsgBox "Dados copiados e tratados com sucesso!", vbInformation
 
 End Sub
+
