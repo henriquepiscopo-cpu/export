@@ -1,4 +1,31 @@
-Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
+Option Explicit
+
+Private Function GetSheetByNameLoose(ByVal sheetName As String) As Worksheet
+    Dim ws As Worksheet
+    Dim target As String, candidate As String
+    
+    target = LCase(Trim(sheetName))
+    
+    For Each ws In ThisWorkbook.Worksheets
+        candidate = LCase(Trim(ws.Name))
+        If candidate = target Then
+            Set GetSheetByNameLoose = ws
+            Exit Function
+        End If
+    Next ws
+    
+    Set GetSheetByNameLoose = Nothing
+End Function
+
+Private Function ListSheets() As String
+    Dim ws As Worksheet, s As String
+    For Each ws In ThisWorkbook.Worksheets
+        s = s & " - [" & ws.Name & "]" & vbCrLf
+    Next ws
+    ListSheets = s
+End Function
+
+Sub AtualizarDebentures_Mensal_V2()
 
     Dim wsVol As Worksheet
     Dim wsPrazo As Worksheet
@@ -15,13 +42,18 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
     Dim c As Long
     Dim prazoValor As Variant
 
-    ' ===== Abas (NOMES EXATOS) =====
-    Set wsVol = ThisWorkbook.Worksheets("Volume")
-    Set wsPrazo = ThisWorkbook.Worksheets("Prazo Médio não Inc")
-    Set wsDest = ThisWorkbook.Worksheets("Deb, CRICRA FII Fiagro (Mensal)")
+    ' ===== Abas (NOMES QUE VOCÊ PASSOU) =====
+    Set wsVol = GetSheetByNameLoose("Volume")
+    Set wsPrazo = GetSheetByNameLoose("Prazo Médio não Inc")
+    Set wsEnc = GetSheetByNameLoose("12 431 V Encerrados")
+    Set wsDest = GetSheetByNameLoose("Deb, CRICRA FII Fiagro (Mensal)")
 
-    ' Nome correto informado por você:
-    Set wsEnc = ThisWorkbook.Worksheets("12 431 V Encerrados")
+    ' Validação: se alguma não existe, mostra as abas existentes
+    If wsVol Is Nothing Or wsPrazo Is Nothing Or wsEnc Is Nothing Or wsDest Is Nothing Then
+        MsgBox "Não encontrei uma ou mais abas. Confira os nomes." & vbCrLf & vbCrLf & _
+               "Abas existentes:" & vbCrLf & ListSheets(), vbCritical
+        Exit Sub
+    End If
 
     ' =========================================================
     ' ACHA LINHA ÚNICA DE DESTINO (mesma linha para tudo)
@@ -37,7 +69,6 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
     ' (1) VOLUME: COPIA ÚLTIMA LINHA B:P
     ' =========================================================
     lastRowVol = wsVol.Cells(wsVol.Rows.Count, "B").End(xlUp).Row
-
     wsVol.Range("B" & lastRowVol & ":P" & lastRowVol).Copy
     wsDest.Range("B" & targetRow).PasteSpecial Paste:=xlPasteValues
     Application.CutCopyMode = False
@@ -66,19 +97,14 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
     prazoValor = wsPrazo.Cells(lastRowPrazo, "C").Value
 
     wsDest.Cells(targetRow, "Q").Value = prazoValor
-
-    ' Formata Q com 1 casa decimal
     With wsDest.Cells(targetRow, "Q")
-        If IsNumeric(.Value) And Not IsEmpty(.Value) Then
-            .NumberFormat = "0.0"
-        End If
+        If IsNumeric(.Value) And Not IsEmpty(.Value) Then .NumberFormat = "0.0"
     End With
 
     ' =========================================================
     ' (3) ENCERRADOS: ÚLTIMA LINHA (pela B) S:U -> S:U (mesma linha)
     ' =========================================================
     lastRowEnc = wsEnc.Cells(wsEnc.Rows.Count, "B").End(xlUp).Row
-
     wsEnc.Range("S" & lastRowEnc & ":U" & lastRowEnc).Copy
     wsDest.Range("S" & targetRow).PasteSpecial Paste:=xlPasteValues
     Application.CutCopyMode = False
@@ -103,6 +129,7 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
     MsgBox "Concluído: Volume (B:P), Prazo (Q) e Encerrados (S:U) na mesma linha!", vbInformation
 
 End Sub
+
 
     MsgBox "Concluído: Volume (B:P), Prazo (Q) e Encerrados (S:U) na mesma linha!", vbInformation
 
