@@ -1,3 +1,5 @@
+Option Explicit
+
 Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
 
     Dim wsOrigem As Worksheet
@@ -49,7 +51,6 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
     nextRowB = wsDestino.Cells(wsDestino.Rows.Count, "B").End(xlUp).Row + 1
     nextRowQ = wsDestino.Cells(wsDestino.Rows.Count, "Q").End(xlUp).Row + 1
     nextRowS = wsDestino.Cells(wsDestino.Rows.Count, "S").End(xlUp).Row + 1
-
     targetRow = Application.WorksheetFunction.Max(nextRowB, nextRowQ, nextRowS)
 
     ' ========= 2) VOLUME: COPIA ÚLTIMA LINHA B:P =========
@@ -65,34 +66,26 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
         End If
     End With
 
-    ' Colunas C:P → dividir por 1.000.000.000
+    ' Colunas C até P → dividir por 1.000.000.000
     For c = wsDestino.Range("C1").Column To wsDestino.Range("P1").Column
         With wsDestino.Cells(targetRow, c)
-            If IsNumeric(.Value) And Not IsEmpty(.Value) Then
-                .Value = .Value / 1000000000#
-            End If
+            If IsNumeric(.Value) And Not IsEmpty(.Value) Then .Value = .Value / 1000000000#
         End With
     Next c
 
-    ' ========= 3) PRAZO (não Inc): ÚLTIMA LINHA (pela B) COLUNA C -> COLUNA Q =========
+    ' ========= 3) PRAZO (não Inc): ÚLTIMA LINHA (pela B) COL C -> COL Q =========
     lastRowPrazo = wsPrazo.Cells(wsPrazo.Rows.Count, "B").End(xlUp).Row
     prazoValor = wsPrazo.Cells(lastRowPrazo, "C").Value
     wsDestino.Cells(targetRow, "Q").Value = prazoValor
 
     ' Formata Q com 1 casa decimal
     With wsDestino.Cells(targetRow, "Q")
-        If IsNumeric(.Value) And Not IsEmpty(.Value) Then
-            .NumberFormat = "0.0"
-        End If
+        If IsNumeric(.Value) And Not IsEmpty(.Value) Then .NumberFormat = "0.0"
     End With
 
     ' ========= 4) ENCERRADOS: ÚLTIMA LINHA (pela B) COPIA B:D -> COLA S:U =========
     lastRowEnc = wsEnc.Cells(wsEnc.Rows.Count, "B").End(xlUp).Row
-
-    ' Fonte: B:D
     arrEnc = wsEnc.Range("B" & lastRowEnc & ":D" & lastRowEnc).Value
-
-    ' Destino: S:U
     wsDestino.Range("S" & targetRow & ":U" & targetRow).Value = arrEnc
 
     ' Coluna S → data (mês/ano) "nov-25"
@@ -106,27 +99,23 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
     ' Colunas T:U → dividir por 1.000.000.000
     For c = wsDestino.Range("T1").Column To wsDestino.Range("U1").Column
         With wsDestino.Cells(targetRow, c)
-            If IsNumeric(.Value) And Not IsEmpty(.Value) Then
-                .Value = .Value / 1000000000#
-            End If
+            If IsNumeric(.Value) And Not IsEmpty(.Value) Then .Value = .Value / 1000000000#
         End With
     Next c
 
-    ' ========= 5) 12 431 Prazo Médio: última linha com dado na COLUNA C -> cola em AC =========
+    ' ========= 5) 12 431 Prazo Médio: última linha com dado na COL C -> cola em AC =========
     lastRowPrazo12431 = wsPrazo12431.Cells(wsPrazo12431.Rows.Count, "C").End(xlUp).Row
     prazo12431Valor = wsPrazo12431.Cells(lastRowPrazo12431, "C").Value
-
     wsDestino.Cells(targetRow, "AC").Value = prazo12431Valor
 
-    ' ========= 6) PUXAR FÓRMULAS ATÉ A LINHA DESTINO =========
-    ' Copia as fórmulas da linha anterior (targetRow-1) para targetRow
-    If targetRow > 2 Then
-        Call PuxarFormulasLinha(wsDestino, targetRow - 1, targetRow, "V:AA")
-        Call PuxarFormulasLinha(wsDestino, targetRow - 1, targetRow, "AD:AD")
-        Call PuxarFormulasLinha(wsDestino, targetRow - 1, targetRow, "AL:AP")
-        Call PuxarFormulasLinha(wsDestino, targetRow - 1, targetRow, "AY:AY")
-        Call PuxarFormulasLinha(wsDestino, targetRow - 1, targetRow, "BA:BD")
-        Call PuxarFormulasLinha(wsDestino, targetRow - 1, targetRow, "BR:BT")
+    ' ========= 6) PUXAR FÓRMULAS (da linha anterior -> targetRow) =========
+    If targetRow > 1 Then
+        PuxarFormulasLinha wsDestino, targetRow - 1, targetRow, "V:AA"
+        PuxarFormulasLinha wsDestino, targetRow - 1, targetRow, "AD"
+        PuxarFormulasLinha wsDestino, targetRow - 1, targetRow, "AL:AP"
+        PuxarFormulasLinha wsDestino, targetRow - 1, targetRow, "AY"
+        PuxarFormulasLinha wsDestino, targetRow - 1, targetRow, "BA:BD"
+        PuxarFormulasLinha wsDestino, targetRow - 1, targetRow, "BR:BT"
     End If
 
     MsgBox "OK! Atualizado (B:P + Q + S:U + AC + fórmulas).", vbInformation
@@ -145,12 +134,26 @@ EH:
 
 End Sub
 
-
 Private Sub PuxarFormulasLinha(ByVal ws As Worksheet, ByVal srcRow As Long, ByVal dstRow As Long, ByVal cols As String)
-    ' Copia somente fórmulas (não valores) da linha srcRow para dstRow no intervalo de colunas informado
-    Dim rngSrc As Range, rngDst As Range
-    Set rngSrc = ws.Range(cols & srcRow)
-    Set rngDst = ws.Range(cols & dstRow)
-    rngDst.FormulaR1C1 = rngSrc.FormulaR1C1
+    ' cols pode ser "V:AA" (intervalo) ou "AD" (coluna única)
+    Dim p() As String
+    Dim colStart As String, colEnd As String
+    Dim addrSrc As String, addrDst As String
+
+    cols = Replace(cols, " ", "")
+
+    If InStr(1, cols, ":", vbTextCompare) > 0 Then
+        p = Split(cols, ":")
+        colStart = p(0)
+        colEnd = p(1)
+    Else
+        colStart = cols
+        colEnd = cols
+    End If
+
+    addrSrc = colStart & srcRow & ":" & colEnd & srcRow
+    addrDst = colStart & dstRow & ":" & colEnd & dstRow
+
+    ws.Range(addrDst).FormulaR1C1 = ws.Range(addrSrc).FormulaR1C1
 End Sub
 
