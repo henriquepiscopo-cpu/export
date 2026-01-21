@@ -26,11 +26,11 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
 
     ' ===== TRATAMENTOS =====
 
-    ' Coluna B → forçar como data
+    ' Coluna B → forçar como data (mês/ano) no formato "nov-25"
     With wsDestino.Cells(lastRowDestino, "B")
         If IsDate(.Value) Then
-            .Value = CDate(.Value)
-            .NumberFormat = "dd/mm/yyyy"
+            .Value = DateSerial(Year(CDate(.Value)), Month(CDate(.Value)), 1)
+            .NumberFormat = "mmm-yy"
         End If
     End With
 
@@ -46,4 +46,5 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
     MsgBox "Dados copiados e tratados com sucesso!", vbInformation
 
 End Sub
+
 
