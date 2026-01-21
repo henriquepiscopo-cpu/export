@@ -1,116 +1,84 @@
-Option Explicit
+Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
 
-Private Function GetSheetByNameLoose(ByVal sheetName As String) As Worksheet
-    Dim ws As Worksheet
-    Dim target As String, candidate As String
-    
-    target = LCase(Trim(sheetName))
-    
-    For Each ws In ThisWorkbook.Worksheets
-        candidate = LCase(Trim(ws.Name))
-        If candidate = target Then
-            Set GetSheetByNameLoose = ws
-            Exit Function
-        End If
-    Next ws
-    
-    Set GetSheetByNameLoose = Nothing
-End Function
-
-Private Function ListSheets() As String
-    Dim ws As Worksheet, s As String
-    For Each ws In ThisWorkbook.Worksheets
-        s = s & " - [" & ws.Name & "]" & vbCrLf
-    Next ws
-    ListSheets = s
-End Function
-
-Sub AtualizarDebentures_Mensal_V2()
-
-    Dim wsVol As Worksheet
+    Dim wsOrigem As Worksheet
     Dim wsPrazo As Worksheet
     Dim wsEnc As Worksheet
-    Dim wsDest As Worksheet
+    Dim wsDestino As Worksheet
 
-    Dim lastRowVol As Long
+    Dim lastRowOrigem As Long
     Dim lastRowPrazo As Long
     Dim lastRowEnc As Long
 
-    Dim nextRowB As Long, nextRowQ As Long, nextRowS As Long
+    Dim nextRowB As Long
+    Dim nextRowQ As Long
+    Dim nextRowS As Long
     Dim targetRow As Long
 
     Dim c As Long
     Dim prazoValor As Variant
 
-    ' ===== Abas (NOMES QUE VOCÊ PASSOU) =====
-    Set wsVol = GetSheetByNameLoose("Volume")
-    Set wsPrazo = GetSheetByNameLoose("Prazo Médio não Inc")
-    Set wsEnc = GetSheetByNameLoose("12 431 V Encerrados")
-    Set wsDest = GetSheetByNameLoose("Deb, CRICRA FII Fiagro (Mensal)")
+    ' Define as abas
+    Set wsOrigem = ThisWorkbook.Worksheets("Volume")
+    Set wsDestino = ThisWorkbook.Worksheets("Deb, CRICRA FII Fiagro (Mensal)")
+    Set wsPrazo = ThisWorkbook.Worksheets("Prazo Médio não Inc")      ' <- sem ponto
+    Set wsEnc = ThisWorkbook.Worksheets("12 431 V Encerrados")        ' <- nome exato
 
-    ' Validação: se alguma não existe, mostra as abas existentes
-    If wsVol Is Nothing Or wsPrazo Is Nothing Or wsEnc Is Nothing Or wsDest Is Nothing Then
-        MsgBox "Não encontrei uma ou mais abas. Confira os nomes." & vbCrLf & vbCrLf & _
-               "Abas existentes:" & vbCrLf & ListSheets(), vbCritical
-        Exit Sub
-    End If
+    ' ========= 1) ACHA LINHA DE DESTINO (baseada em B, Q e S) =========
+    nextRowB = wsDestino.Cells(wsDestino.Rows.Count, "B").End(xlUp).Row + 1
+    nextRowQ = wsDestino.Cells(wsDestino.Rows.Count, "Q").End(xlUp).Row + 1
+    nextRowS = wsDestino.Cells(wsDestino.Rows.Count, "S").End(xlUp).Row + 1
 
-    ' =========================================================
-    ' ACHA LINHA ÚNICA DE DESTINO (mesma linha para tudo)
-    ' Baseada nas próximas linhas livres de B, Q e S
-    ' =========================================================
-    nextRowB = wsDest.Cells(wsDest.Rows.Count, "B").End(xlUp).Row + 1
-    nextRowQ = wsDest.Cells(wsDest.Rows.Count, "Q").End(xlUp).Row + 1
-    nextRowS = wsDest.Cells(wsDest.Rows.Count, "S").End(xlUp).Row + 1
-
+    ' Usa a próxima linha disponível considerando B, Q e S
     targetRow = Application.WorksheetFunction.Max(nextRowB, nextRowQ, nextRowS)
 
-    ' =========================================================
-    ' (1) VOLUME: COPIA ÚLTIMA LINHA B:P
-    ' =========================================================
-    lastRowVol = wsVol.Cells(wsVol.Rows.Count, "B").End(xlUp).Row
-    wsVol.Range("B" & lastRowVol & ":P" & lastRowVol).Copy
-    wsDest.Range("B" & targetRow).PasteSpecial Paste:=xlPasteValues
+    ' ========= 2) VOLUME: COPIA ÚLTIMA LINHA B:P =========
+    lastRowOrigem = wsOrigem.Cells(wsOrigem.Rows.Count, "B").End(xlUp).Row
+
+    wsOrigem.Range("B" & lastRowOrigem & ":P" & lastRowOrigem).Copy
+    wsDestino.Range("B" & targetRow).PasteSpecial Paste:=xlPasteValues
     Application.CutCopyMode = False
 
-    ' Coluna B → data mês/ano no formato "nov-25"
-    With wsDest.Cells(targetRow, "B")
+    ' ===== TRATAMENTOS (B e C:P) =====
+
+    ' Coluna B → forçar como data (mês/ano) no formato "nov-25"
+    With wsDestino.Cells(targetRow, "B")
         If IsDate(.Value) Then
             .Value = DateSerial(Year(CDate(.Value)), Month(CDate(.Value)), 1)
             .NumberFormat = "mmm-yy"
         End If
     End With
 
-    ' Colunas C:P → dividir por 1.000.000.000
-    For c = wsDest.Range("C1").Column To wsDest.Range("P1").Column
-        With wsDest.Cells(targetRow, c)
+    ' Colunas C até P → dividir por 1.000.000.000
+    For c = wsDestino.Range("C1").Column To wsDestino.Range("P1").Column
+        With wsDestino.Cells(targetRow, c)
             If IsNumeric(.Value) And Not IsEmpty(.Value) Then
                 .Value = .Value / 1000000000#
             End If
         End With
     Next c
 
-    ' =========================================================
-    ' (2) PRAZO: ÚLTIMA LINHA (pela B) COLUNA C -> COLUNA Q
-    ' =========================================================
+    ' ========= 3) PRAZO: PEGA ÚLTIMA LINHA E COLA COLUNA Q =========
     lastRowPrazo = wsPrazo.Cells(wsPrazo.Rows.Count, "B").End(xlUp).Row
     prazoValor = wsPrazo.Cells(lastRowPrazo, "C").Value
 
-    wsDest.Cells(targetRow, "Q").Value = prazoValor
-    With wsDest.Cells(targetRow, "Q")
-        If IsNumeric(.Value) And Not IsEmpty(.Value) Then .NumberFormat = "0.0"
+    wsDestino.Cells(targetRow, "Q").Value = prazoValor
+
+    ' Formata Q com 1 casa decimal
+    With wsDestino.Cells(targetRow, "Q")
+        If IsNumeric(.Value) And Not IsEmpty(.Value) Then
+            .NumberFormat = "0.0"
+        End If
     End With
 
-    ' =========================================================
-    ' (3) ENCERRADOS: ÚLTIMA LINHA (pela B) S:U -> S:U (mesma linha)
-    ' =========================================================
+    ' ========= 4) ENCERRADOS: ÚLTIMA LINHA (pela B) S:U -> S:U =========
     lastRowEnc = wsEnc.Cells(wsEnc.Rows.Count, "B").End(xlUp).Row
+
     wsEnc.Range("S" & lastRowEnc & ":U" & lastRowEnc).Copy
-    wsDest.Range("S" & targetRow).PasteSpecial Paste:=xlPasteValues
+    wsDestino.Range("S" & targetRow).PasteSpecial Paste:=xlPasteValues
     Application.CutCopyMode = False
 
     ' Coluna S → data mês/ano no formato "nov-25"
-    With wsDest.Cells(targetRow, "S")
+    With wsDestino.Cells(targetRow, "S")
         If IsDate(.Value) Then
             .Value = DateSerial(Year(CDate(.Value)), Month(CDate(.Value)), 1)
             .NumberFormat = "mmm-yy"
@@ -118,20 +86,14 @@ Sub AtualizarDebentures_Mensal_V2()
     End With
 
     ' Colunas T:U → dividir por 1.000.000.000
-    For c = wsDest.Range("T1").Column To wsDest.Range("U1").Column
-        With wsDest.Cells(targetRow, c)
+    For c = wsDestino.Range("T1").Column To wsDestino.Range("U1").Column
+        With wsDestino.Cells(targetRow, c)
             If IsNumeric(.Value) And Not IsEmpty(.Value) Then
                 .Value = .Value / 1000000000#
             End If
         End With
     Next c
 
-    MsgBox "Concluído: Volume (B:P), Prazo (Q) e Encerrados (S:U) na mesma linha!", vbInformation
+    MsgBox "Dados copiados e tratados com sucesso! (B:P + Q + S:U)", vbInformation
 
 End Sub
-
-
-    MsgBox "Concluído: Volume (B:P), Prazo (Q) e Encerrados (S:U) na mesma linha!", vbInformation
-
-End Sub
-
