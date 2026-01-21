@@ -2,16 +2,13 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
 
     Dim wsOrigem As Worksheet
     Dim wsPrazo As Worksheet
-    Dim wsEnc As Worksheet
     Dim wsDestino As Worksheet
 
     Dim lastRowOrigem As Long
     Dim lastRowPrazo As Long
-    Dim lastRowEnc As Long
 
     Dim nextRowB As Long
     Dim nextRowQ As Long
-    Dim nextRowS As Long
     Dim targetRow As Long
 
     Dim c As Long
@@ -20,16 +17,17 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
     ' Define as abas
     Set wsOrigem = ThisWorkbook.Worksheets("Volume")
     Set wsDestino = ThisWorkbook.Worksheets("Deb, CRICRA FII Fiagro (Mensal)")
-    Set wsPrazo = ThisWorkbook.Worksheets("Prazo Médio não Inc")      ' <- sem ponto
-    Set wsEnc = ThisWorkbook.Worksheets("12 431 V Encerrados")        ' <- nome exato
 
-    ' ========= 1) ACHA LINHA DE DESTINO (baseada em B, Q e S) =========
+    ' Aba de prazo (nome exatamente como você pediu)
+    ' (Se no seu arquivo estiver sem ponto no final, troque aqui.)
+    Set wsPrazo = ThisWorkbook.Worksheets("Prazo Médio não Inc.")
+
+    ' ========= 1) ACHA LINHA DE DESTINO (baseada em B e Q) =========
     nextRowB = wsDestino.Cells(wsDestino.Rows.Count, "B").End(xlUp).Row + 1
     nextRowQ = wsDestino.Cells(wsDestino.Rows.Count, "Q").End(xlUp).Row + 1
-    nextRowS = wsDestino.Cells(wsDestino.Rows.Count, "S").End(xlUp).Row + 1
 
-    ' Usa a próxima linha disponível considerando B, Q e S
-    targetRow = Application.WorksheetFunction.Max(nextRowB, nextRowQ, nextRowS)
+    ' Usa a próxima linha disponível considerando as duas colunas
+    targetRow = Application.WorksheetFunction.Max(nextRowB, nextRowQ)
 
     ' ========= 2) VOLUME: COPIA ÚLTIMA LINHA B:P =========
     lastRowOrigem = wsOrigem.Cells(wsOrigem.Rows.Count, "B").End(xlUp).Row
@@ -63,37 +61,6 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
 
     wsDestino.Cells(targetRow, "Q").Value = prazoValor
 
-    ' Formata Q com 1 casa decimal
-    With wsDestino.Cells(targetRow, "Q")
-        If IsNumeric(.Value) And Not IsEmpty(.Value) Then
-            .NumberFormat = "0.0"
-        End If
-    End With
-
-    ' ========= 4) ENCERRADOS: ÚLTIMA LINHA (pela B) S:U -> S:U =========
-    lastRowEnc = wsEnc.Cells(wsEnc.Rows.Count, "B").End(xlUp).Row
-
-    wsEnc.Range("S" & lastRowEnc & ":U" & lastRowEnc).Copy
-    wsDestino.Range("S" & targetRow).PasteSpecial Paste:=xlPasteValues
-    Application.CutCopyMode = False
-
-    ' Coluna S → data mês/ano no formato "nov-25"
-    With wsDestino.Cells(targetRow, "S")
-        If IsDate(.Value) Then
-            .Value = DateSerial(Year(CDate(.Value)), Month(CDate(.Value)), 1)
-            .NumberFormat = "mmm-yy"
-        End If
-    End With
-
-    ' Colunas T:U → dividir por 1.000.000.000
-    For c = wsDestino.Range("T1").Column To wsDestino.Range("U1").Column
-        With wsDestino.Cells(targetRow, c)
-            If IsNumeric(.Value) And Not IsEmpty(.Value) Then
-                .Value = .Value / 1000000000#
-            End If
-        End With
-    Next c
-
-    MsgBox "Dados copiados e tratados com sucesso! (B:P + Q + S:U)", vbInformation
+    MsgBox "Dados copiados e tratados com sucesso! (B:P + Q)", vbInformation
 
 End Sub
