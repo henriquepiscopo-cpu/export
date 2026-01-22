@@ -77,7 +77,7 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
     arrVol = wsOrigem.Range("B" & lastRowOrigem & ":P" & lastRowOrigem).Value
     wsDestino.Range("B" & targetRow & ":P" & targetRow).Value = arrVol
 
-    ' B → FORÇAR MÊS/ANO a partir do TEXTO da ORIGEM (resolve Nov/25 virar 2026)
+    ' B → FORÇAR MÊS/ANO a partir do TEXTO da ORIGEM (robusto, sem overflow)
     SetMesAnoCellFromSourceText wsOrigem.Cells(lastRowOrigem, "B"), wsDestino.Cells(targetRow, "B")
 
     ' C:P → /1e9
@@ -100,7 +100,7 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
     arrEnc = wsEnc.Range("B" & lastRowEnc & ":D" & lastRowEnc).Value
     wsDestino.Range("S" & targetRow & ":U" & targetRow).Value = arrEnc
 
-    ' S → data a partir do TEXTO da ORIGEM
+    ' S → data a partir do TEXTO da ORIGEM (robusto, sem overflow)
     SetMesAnoCellFromSourceText wsEnc.Cells(lastRowEnc, "B"), wsDestino.Cells(targetRow, "S")
 
     ' T:U → /1e9
@@ -130,7 +130,7 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
     arrOferNInc = wsOferDetNInc.Range("B" & lastRowOferDetNInc & ":G" & lastRowOferDetNInc).Value
     wsDestino.Range("AE" & targetRow & ":AJ" & targetRow).Value = arrOferNInc
 
-    ' AE → data a partir do TEXTO da ORIGEM
+    ' AE → data a partir do TEXTO da ORIGEM (robusto, sem overflow)
     SetMesAnoCellFromSourceText wsOferDetNInc.Cells(lastRowOferDetNInc, "B"), wsDestino.Cells(targetRow, "AE")
 
     ' AF:AJ → /1e9
@@ -145,7 +145,7 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
     arrOfer = wsOferDet.Range("B" & lastRowOferDet & ":G" & lastRowOferDet).Value
     wsDestino.Range("AR" & targetRow & ":AW" & targetRow).Value = arrOfer
 
-    ' AR → data a partir do TEXTO da ORIGEM
+    ' AR → data a partir do TEXTO da ORIGEM (robusto, sem overflow)
     SetMesAnoCellFromSourceText wsOferDet.Cells(lastRowOferDet, "B"), wsDestino.Cells(targetRow, "AR")
 
     ' AS:AW → /1e9 e 1 casa decimal
@@ -163,7 +163,7 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
     arrDestRec = wsDestRec.Range("B" & lastRowDestRec & ":L" & lastRowDestRec).Value
     wsDestino.Range("BG" & targetRow & ":BP" & targetRow).Value = arrDestRec
 
-    ' BG → data a partir do TEXTO da ORIGEM
+    ' BG → data a partir do TEXTO da ORIGEM (robusto, sem overflow)
     SetMesAnoCellFromSourceText wsDestRec.Cells(lastRowDestRec, "B"), wsDestino.Cells(targetRow, "BG")
 
     ' BH:BP → /1e9 e 1 casa decimal
@@ -176,7 +176,7 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
         End With
     Next c
 
-    MsgBox "OK! Datas corrigidas usando o TEXTO da origem (Nov/25 -> nov-25).", vbInformation
+    MsgBox "OK! Datas corrigidas (robusto) usando TEXTO/Value2 (sem overflow).", vbInformation
 
 CleanExit:
     Application.Calculation = oldCalc
@@ -222,58 +222,91 @@ End Sub
 ' =======================
 
 Private Sub SetMesAnoCellFromSourceText(ByVal srcCell As Range, ByVal dstCell As Range)
-    ' Força a data SEM confiar no Value (que pode estar "01/11/2026")
+    ' 1) tenta pelo TEXTO (Nov/25 etc)
+    ' 2) se falhar, tenta pelo Value2 (serial Excel) se estiver em faixa válida
+    On Error GoTo SafeExit
+
     Dim txt As String
     Dim d As Variant
+    Dim v As Variant
+    Dim serial As Double
 
     txt = Trim$(srcCell.Text)
     d = ParseMMMYY(txt)
 
-    ' fallback: tenta pelo valor como string, se o texto não estiver como "Nov/25"
     If IsEmpty(d) Then
         d = ParseMMMYY(CStr(srcCell.Value))
     End If
 
     If Not IsEmpty(d) Then
         dstCell.Value = d
-        dstCell.NumberFormat = "[$-pt-BR]mmm-yy" ' ex: nov-25 / mar-12
+        dstCell.NumberFormat = "[$-pt-BR]mmm-yy"
+        Exit Sub
     End If
+
+    v = srcCell.Value2
+    If IsNumeric(v) Then
+        serial = CDbl(v)
+        If serial >= 1# And serial <= 2958465# Then
+            dstCell.Value = DateSerial(Year(CDate(serial)), Month(CDate(serial)), 1)
+            dstCell.NumberFormat = "[$-pt-BR]mmm-yy"
+        End If
+    End If
+
+SafeExit:
 End Sub
 
 Private Function ParseMMMYY(ByVal s As String) As Variant
-    ' Aceita: "Nov/25", "nov-25", "Nov/2025", "nov-2025" (PT ou EN)
+    ' Parse robusto "Nov/25", "Dez/2025", etc, sem overflow.
+    On Error GoTo Fail
+
     Dim t As String, parts() As String
-    Dim mon As Long, y As Long
+    Dim mon As Long
+    Dim yTxt As String, yDigits As String
+    Dim y As LongLong
 
     t = LCase$(Trim$(s))
-    If t = "" Then
-        ParseMMMYY = Empty
-        Exit Function
-    End If
+    If t = "" Then GoTo Fail
 
+    t = Replace(t, ChrW(160), "") ' NBSP invisível
     t = Replace(t, " ", "")
     t = Replace(t, "/", "-")
+    t = Replace(t, ".", "-")
 
     parts = Split(t, "-")
-    If UBound(parts) < 1 Then
-        ParseMMMYY = Empty
-        Exit Function
-    End If
+    If UBound(parts) < 1 Then GoTo Fail
 
     mon = MesParaNumeroPTEN(parts(0))
-    If mon = 0 Then
-        ParseMMMYY = Empty
-        Exit Function
-    End If
+    If mon = 0 Then GoTo Fail
 
-    If Len(parts(1)) = 2 Then
-        y = 2000 + CLng(parts(1))
+    yTxt = parts(1)
+    yDigits = ExtrairDigitos(yTxt)
+    If Len(yDigits) = 0 Then GoTo Fail
+
+    If Len(yDigits) = 2 Then
+        y = 2000 + CLngLng(yDigits)
     Else
-        y = CLng(parts(1))
+        y = CLngLng(yDigits)
         If y < 100 Then y = 2000 + y
     End If
 
-    ParseMMMYY = DateSerial(y, mon, 1)
+    If y < 1900 Or y > 9999 Then GoTo Fail
+
+    ParseMMMYY = DateSerial(CLng(y), mon, 1)
+    Exit Function
+
+Fail:
+    ParseMMMYY = Empty
+End Function
+
+Private Function ExtrairDigitos(ByVal s As String) As String
+    Dim i As Long, ch As String, out As String
+    out = ""
+    For i = 1 To Len(s)
+        ch = Mid$(s, i, 1)
+        If ch Like "#" Then out = out & ch
+    Next i
+    ExtrairDigitos = out
 End Function
 
 Private Function MesParaNumeroPTEN(ByVal m As String) As Long
