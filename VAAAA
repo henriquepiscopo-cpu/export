@@ -59,7 +59,7 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
     Set wsOferDet = ThisWorkbook.Worksheets("12 431 Ofer  Detentor")
     Set wsDestRec = ThisWorkbook.Worksheets("Dest  Recursos")
 
-    ' Garante que as abas de origem estão calculadas antes de ler .Text
+    ' Garante cálculo antes de ler .Text
     wsOrigem.Calculate
     wsEnc.Calculate
     wsOferDetNInc.Calculate
@@ -77,13 +77,15 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
     arrVol = wsOrigem.Range("B" & lastRowOrigem & ":P" & lastRowOrigem).Value
     wsDestino.Range("B" & targetRow & ":P" & targetRow).Value = arrVol
 
-    ' B → FORÇAR MÊS/ANO a partir do TEXTO da ORIGEM (robusto, sem overflow)
+    ' B → data mês/ano (robusto, sem overflow)
     SetMesAnoCellFromSourceText wsOrigem.Cells(lastRowOrigem, "B"), wsDestino.Cells(targetRow, "B")
 
-    ' C:P → /1e9
+    ' C:P → /1e9 (robusto: converte texto numérico também)
     For c = wsDestino.Range("C1").Column To wsDestino.Range("P1").Column
         With wsDestino.Cells(targetRow, c)
-            If IsNumeric(.Value) And Not IsEmpty(.Value) Then .Value = .Value / 1000000000#
+            Dim dv As Variant
+            dv = ToDoubleSafe(.Value)
+            If Not IsEmpty(dv) Then .Value = CDbl(dv) / 1000000000#
         End With
     Next c
 
@@ -100,13 +102,15 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
     arrEnc = wsEnc.Range("B" & lastRowEnc & ":D" & lastRowEnc).Value
     wsDestino.Range("S" & targetRow & ":U" & targetRow).Value = arrEnc
 
-    ' S → data a partir do TEXTO da ORIGEM (robusto, sem overflow)
+    ' S → data mês/ano (robusto, sem overflow)
     SetMesAnoCellFromSourceText wsEnc.Cells(lastRowEnc, "B"), wsDestino.Cells(targetRow, "S")
 
-    ' T:U → /1e9
+    ' T:U → /1e9 (robusto)
     For c = wsDestino.Range("T1").Column To wsDestino.Range("U1").Column
         With wsDestino.Cells(targetRow, c)
-            If IsNumeric(.Value) And Not IsEmpty(.Value) Then .Value = .Value / 1000000000#
+            Dim dv2 As Variant
+            dv2 = ToDoubleSafe(.Value)
+            If Not IsEmpty(dv2) Then .Value = CDbl(dv2) / 1000000000#
         End With
     Next c
 
@@ -130,13 +134,15 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
     arrOferNInc = wsOferDetNInc.Range("B" & lastRowOferDetNInc & ":G" & lastRowOferDetNInc).Value
     wsDestino.Range("AE" & targetRow & ":AJ" & targetRow).Value = arrOferNInc
 
-    ' AE → data a partir do TEXTO da ORIGEM (robusto, sem overflow)
+    ' AE → data mês/ano
     SetMesAnoCellFromSourceText wsOferDetNInc.Cells(lastRowOferDetNInc, "B"), wsDestino.Cells(targetRow, "AE")
 
-    ' AF:AJ → /1e9
+    ' AF:AJ → /1e9 (robusto)
     For c = wsDestino.Range("AF1").Column To wsDestino.Range("AJ1").Column
         With wsDestino.Cells(targetRow, c)
-            If IsNumeric(.Value) And Not IsEmpty(.Value) Then .Value = .Value / 1000000000#
+            Dim dv3 As Variant
+            dv3 = ToDoubleSafe(.Value)
+            If Not IsEmpty(dv3) Then .Value = CDbl(dv3) / 1000000000#
         End With
     Next c
 
@@ -145,14 +151,16 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
     arrOfer = wsOferDet.Range("B" & lastRowOferDet & ":G" & lastRowOferDet).Value
     wsDestino.Range("AR" & targetRow & ":AW" & targetRow).Value = arrOfer
 
-    ' AR → data a partir do TEXTO da ORIGEM (robusto, sem overflow)
+    ' AR → data mês/ano
     SetMesAnoCellFromSourceText wsOferDet.Cells(lastRowOferDet, "B"), wsDestino.Cells(targetRow, "AR")
 
     ' AS:AW → /1e9 e 1 casa decimal
     For c = wsDestino.Range("AS1").Column To wsDestino.Range("AW1").Column
         With wsDestino.Cells(targetRow, c)
-            If IsNumeric(.Value) And Not IsEmpty(.Value) Then
-                .Value = .Value / 1000000000#
+            Dim dv4 As Variant
+            dv4 = ToDoubleSafe(.Value)
+            If Not IsEmpty(dv4) Then
+                .Value = CDbl(dv4) / 1000000000#
                 .NumberFormat = "0.0"
             End If
         End With
@@ -163,20 +171,22 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
     arrDestRec = wsDestRec.Range("B" & lastRowDestRec & ":L" & lastRowDestRec).Value
     wsDestino.Range("BG" & targetRow & ":BP" & targetRow).Value = arrDestRec
 
-    ' BG → data a partir do TEXTO da ORIGEM (robusto, sem overflow)
+    ' BG → data mês/ano
     SetMesAnoCellFromSourceText wsDestRec.Cells(lastRowDestRec, "B"), wsDestino.Cells(targetRow, "BG")
 
     ' BH:BP → /1e9 e 1 casa decimal
     For c = wsDestino.Range("BH1").Column To wsDestino.Range("BP1").Column
         With wsDestino.Cells(targetRow, c)
-            If IsNumeric(.Value) And Not IsEmpty(.Value) Then
-                .Value = .Value / 1000000000#
+            Dim dv5 As Variant
+            dv5 = ToDoubleSafe(.Value)
+            If Not IsEmpty(dv5) Then
+                .Value = CDbl(dv5) / 1000000000#
                 .NumberFormat = "0.0"
             End If
         End With
     Next c
 
-    MsgBox "OK! Datas corrigidas (robusto) usando TEXTO/Value2 (sem overflow).", vbInformation
+    MsgBox "OK! (Sem estouro) e divisão por 1e9 aplicada mesmo com números em texto.", vbInformation
 
 CleanExit:
     Application.Calculation = oldCalc
@@ -218,7 +228,7 @@ End Sub
 
 
 ' =======================
-' DATAS (robustas)
+' DATAS (robustas, sem overflow)
 ' =======================
 
 Private Sub SetMesAnoCellFromSourceText(ByVal srcCell As Range, ByVal dstCell As Range)
@@ -232,15 +242,15 @@ Private Sub SetMesAnoCellFromSourceText(ByVal srcCell As Range, ByVal dstCell As
     Dim serial As Double
 
     txt = Trim$(srcCell.Text)
-    d = ParseMMMYY(txt)
+    d = ParseMMMYY_Safe(txt)
 
     If IsEmpty(d) Then
-        d = ParseMMMYY(CStr(srcCell.Value))
+        d = ParseMMMYY_Safe(CStr(srcCell.Value))
     End If
 
     If Not IsEmpty(d) Then
         dstCell.Value = d
-        dstCell.NumberFormat = "[$-pt-BR]mmm-yy"
+        dstCell.NumberFormat = "[$-pt-BR]mmm-yy"  ' ex: nov-25 / mar-12
         Exit Sub
     End If
 
@@ -256,19 +266,21 @@ Private Sub SetMesAnoCellFromSourceText(ByVal srcCell As Range, ByVal dstCell As
 SafeExit:
 End Sub
 
-Private Function ParseMMMYY(ByVal s As String) As Variant
-    ' Parse robusto "Nov/25", "Dez/2025", etc, sem overflow.
+Private Function ParseMMMYY_Safe(ByVal s As String) As Variant
+    ' Parse robusto para mês/ano SEM usar CLng direto.
+    ' Regra do ano: pega os ÚLTIMOS 2 ou 4 dígitos dos dígitos encontrados.
     On Error GoTo Fail
 
     Dim t As String, parts() As String
     Dim mon As Long
-    Dim yTxt As String, yDigits As String
-    Dim y As LongLong
+    Dim yDigits As String
+    Dim yy As String, yyyy As String
+    Dim y As Long
 
     t = LCase$(Trim$(s))
     If t = "" Then GoTo Fail
 
-    t = Replace(t, ChrW(160), "") ' NBSP invisível
+    t = Replace(t, ChrW(160), "") ' NBSP
     t = Replace(t, " ", "")
     t = Replace(t, "/", "-")
     t = Replace(t, ".", "-")
@@ -279,24 +291,25 @@ Private Function ParseMMMYY(ByVal s As String) As Variant
     mon = MesParaNumeroPTEN(parts(0))
     If mon = 0 Then GoTo Fail
 
-    yTxt = parts(1)
-    yDigits = ExtrairDigitos(yTxt)
+    yDigits = ExtrairDigitos(parts(1))
     If Len(yDigits) = 0 Then GoTo Fail
 
-    If Len(yDigits) = 2 Then
-        y = 2000 + CLngLng(yDigits)
+    ' Usa SEMPRE os últimos dígitos (evita overflow se vier lixo junto)
+    If Len(yDigits) >= 4 Then
+        yyyy = Right$(yDigits, 4)
+        y = CLng(yyyy)
     Else
-        y = CLngLng(yDigits)
-        If y < 100 Then y = 2000 + y
+        yy = Right$(yDigits, 2)
+        y = 2000 + CLng(yy)
     End If
 
     If y < 1900 Or y > 9999 Then GoTo Fail
 
-    ParseMMMYY = DateSerial(CLng(y), mon, 1)
+    ParseMMMYY_Safe = DateSerial(y, mon, 1)
     Exit Function
 
 Fail:
-    ParseMMMYY = Empty
+    ParseMMMYY_Safe = Empty
 End Function
 
 Private Function ExtrairDigitos(ByVal s As String) As String
@@ -328,4 +341,71 @@ Private Function MesParaNumeroPTEN(ByVal m As String) As Long
         Case "dec", "dez": MesParaNumeroPTEN = 12
         Case Else: MesParaNumeroPTEN = 0
     End Select
+End Function
+
+' =======================
+' NÚMEROS (robusto: pega string "1.234.567,89" ou "1,234,567.89" etc)
+' =======================
+Private Function ToDoubleSafe(ByVal v As Variant) As Variant
+    On Error GoTo Fail
+
+    If IsError(v) Or IsEmpty(v) Then GoTo Fail
+
+    If IsNumeric(v) Then
+        ToDoubleSafe = CDbl(v)
+        Exit Function
+    End If
+
+    Dim s As String
+    s = Trim$(CStr(v))
+    If s = "" Then GoTo Fail
+
+    s = Replace(s, ChrW(160), "") ' NBSP
+
+    ' mantém só dígitos, sinal e separadores
+    Dim i As Long, ch As String, clean As String
+    clean = ""
+    For i = 1 To Len(s)
+        ch = Mid$(s, i, 1)
+        If (ch Like "#") Or ch = "-" Or ch = "," Or ch = "." Then clean = clean & ch
+    Next i
+    If clean = "" Or clean = "-" Then GoTo Fail
+
+    ' Estratégia:
+    ' - se tiver vírgula e ponto: assume o ÚLTIMO separador como decimal e remove o outro
+    ' - se tiver só um tipo: decide se é milhar (3 dígitos depois) ou decimal
+    Dim pPos As Long, cPos As Long
+    pPos = InStrRev(clean, ".")
+    cPos = InStrRev(clean, ",")
+
+    If pPos > 0 And cPos > 0 Then
+        If pPos > cPos Then
+            ' decimal = ponto
+            clean = Replace(clean, ",", "")
+        Else
+            ' decimal = vírgula
+            clean = Replace(clean, ".", "")
+            clean = Replace(clean, ",", ".")
+        End If
+    ElseIf cPos > 0 Then
+        ' só vírgula: se tiver 3 dígitos depois, é milhar → remove; senão decimal → vira ponto
+        If Len(clean) - cPos = 3 Then
+            clean = Replace(clean, ",", "")
+        Else
+            clean = Replace(clean, ",", ".")
+        End If
+    ElseIf pPos > 0 Then
+        ' só ponto: se tiver 3 dígitos depois, é milhar → remove; senão decimal
+        If Len(clean) - pPos = 3 Then
+            clean = Replace(clean, ".", "")
+        End If
+    End If
+
+    If IsNumeric(clean) Then
+        ToDoubleSafe = CDbl(clean)
+        Exit Function
+    End If
+
+Fail:
+    ToDoubleSafe = Empty
 End Function
