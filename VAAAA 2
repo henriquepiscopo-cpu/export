@@ -1,43 +1,85 @@
 Option Explicit
 
 '========================
+' CONFIG (AJUSTE SE PRECISAR)
+'========================
+Private Const START_ROW_TABELA As Long = 5   ' a tabela começa na linha 5
+
+'========================
 ' AUXILIARES
 '========================
-Private Function LinhaDaMaiorData(ws As Worksheet, ByVal colLetra As String) As Long
-    Dim maxDate As Date
-    Dim r As Range
 
-    On Error GoTo Fail
-    maxDate = Application.WorksheetFunction.Max(ws.Range(colLetra & ":" & colLetra))
+Private Function LinhaFimTabelaPorVazio(ws As Worksheet, ByVal colLetra As String, ByVal startRow As Long) As Long
+    ' Retorna a última linha com conteúdo contínuo a partir de startRow.
+    Dim r As Long
+    r = startRow
 
-    Set r = ws.Range(colLetra & ":" & colLetra).Find( _
-                What:=maxDate, _
-                LookIn:=xlValues, _
-                LookAt:=xlWhole _
-            )
+    Do While Trim$(CStr(ws.Cells(r, colLetra).Value)) <> ""
+        r = r + 1
+        If r > ws.Rows.Count Then Exit Do
+    Loop
 
-    If r Is Nothing Then
-        LinhaDaMaiorData = 0
-    Else
-        LinhaDaMaiorData = r.Row
-    End If
-    Exit Function
-
-Fail:
-    LinhaDaMaiorData = 0
+    LinhaFimTabelaPorVazio = r - 1
 End Function
 
-Private Function LinhaDepoisDaMaiorData(ws As Worksheet, ByVal colLetra As String) As Long
-    Dim linhaMax As Long
-    linhaMax = LinhaDaMaiorData(ws, colLetra)
+Private Function LinhaDaMaiorDataNoBloco(ws As Worksheet, ByVal colLetra As String, ByVal startRow As Long) As Long
+    ' Procura a MAIOR data dentro do bloco:
+    ' startRow -> primeira linha vazia na coluna colLetra
+    Dim endRow As Long, r As Long
+    Dim bestRow As Long
+    Dim bestDate As Date
+    Dim v As Variant
 
-    If linhaMax = 0 Then
-        ' fallback: depois do último usado
-        LinhaDepoisDaMaiorData = ws.Cells(ws.Rows.Count, colLetra).End(xlUp).Row + 1
-    Else
-        LinhaDepoisDaMaiorData = linhaMax + 1
+    endRow = LinhaFimTabelaPorVazio(ws, colLetra, startRow)
+    If endRow < startRow Then
+        LinhaDaMaiorDataNoBloco = 0
+        Exit Function
     End If
+
+    bestRow = 0
+    bestDate = DateSerial(1900, 1, 1)
+
+    For r = startRow To endRow
+        v = ws.Cells(r, colLetra).Value
+
+        ' tenta interpretar como data
+        If IsDate(v) Then
+            If CDate(v) > bestDate Then
+                bestDate = CDate(v)
+                bestRow = r
+            End If
+        End If
+    Next r
+
+    LinhaDaMaiorDataNoBloco = bestRow
 End Function
+
+Private Function LinhaParaColarDepoisDaTabela(ws As Worksheet, ByVal colLetra As String, ByVal startRow As Long) As Long
+    ' Cola na linha imediatamente após o último registro da tabela (fim do bloco)
+    LinhaParaColarDepoisDaTabela = LinhaFimTabelaPorVazio(ws, colLetra, startRow) + 1
+End Function
+
+Private Sub PuxarFormulasLinha(ByVal ws As Worksheet, ByVal srcRow As Long, ByVal dstRow As Long, ByVal cols As String)
+    Dim p() As String
+    Dim colStart As String, colEnd As String
+    Dim addrSrc As String, addrDst As String
+
+    cols = Replace(cols, " ", "")
+
+    If InStr(1, cols, ":", vbTextCompare) > 0 Then
+        p = Split(cols, ":")
+        colStart = p(0)
+        colEnd = p(1)
+    Else
+        colStart = cols
+        colEnd = cols
+    End If
+
+    addrSrc = colStart & srcRow & ":" & colEnd & srcRow
+    addrDst = colStart & dstRow & ":" & colEnd & dstRow
+
+    ws.Range(addrDst).FormulaR1C1 = ws.Range(addrSrc).FormulaR1C1
+End Sub
 
 '========================
 ' MACRO PRINCIPAL
@@ -67,32 +109,31 @@ Sub CopiarUltimaLinha_Mensal_Para_Anual()
     Set wsSrc = ThisWorkbook.Worksheets("Deb, CRICRA FII Fiagro (Mensal)")
     Set wsDst = ThisWorkbook.Worksheets("Deb, CRICRA FII Fiagro (Anual)")
 
-    ' ORIGEM: pega a linha da maior data na coluna B
-    srcRow = LinhaDaMaiorData(wsSrc, "B")
-    If srcRow = 0 Then Err.Raise 5, , "Não encontrei data válida na origem (coluna B)."
+    ' ===== ORIGEM: pega a linha da maior data dentro do bloco da tabela (linha 5 até vazio) =====
+    srcRow = LinhaDaMaiorDataNoBloco(wsSrc, "B", START_ROW_TABELA)
+    If srcRow = 0 Then Err.Raise 5, , "Não encontrei nenhuma data válida na origem dentro do bloco (coluna B, a partir da linha 5)."
 
-    ' DESTINO: cola depois da maior data na coluna B
-    dstRow = LinhaDepoisDaMaiorData(wsDst, "B")
+    ' ===== DESTINO: cola DEPOIS do fim da tabela (linha 5 até vazio) =====
+    dstRow = LinhaParaColarDepoisDaTabela(wsDst, "B", START_ROW_TABELA)
 
-    ' B:P (origem -> destino)
+    ' ===== B:P (origem -> destino) =====
     wsDst.Range("B" & dstRow & ":P" & dstRow).Value = _
         wsSrc.Range("B" & srcRow & ":P" & srcRow).Value
 
-    ' S:U (origem) -> R:T (destino)
+    ' ===== S:U (origem) -> R:T (destino) =====
     wsDst.Range("R" & dstRow & ":T" & dstRow).Value = _
         wsSrc.Range("S" & srcRow & ":U" & srcRow).Value
 
-    ' Puxar fórmulas U:Z (da linha anterior para a linha destino)
-    If dstRow > 1 Then
-        wsDst.Range("U" & dstRow & ":Z" & dstRow).FormulaR1C1 = _
-            wsDst.Range("U" & (dstRow - 1) & ":Z" & (dstRow - 1)).FormulaR1C1
+    ' ===== Puxar fórmulas U:Z (da linha anterior para a linha destino) =====
+    If dstRow > START_ROW_TABELA Then
+        PuxarFormulasLinha wsDst, dstRow - 1, dstRow, "U:Z"
     End If
 
-    ' AC:AD (origem) -> AB:AC (destino)
+    ' ===== AC:AD (origem) -> AB:AC (destino) =====
     wsDst.Range("AB" & dstRow & ":AC" & dstRow).Value = _
         wsSrc.Range("AC" & srcRow & ":AD" & srcRow).Value
 
-    MsgBox "OK! Colado no Anual logo após a maior data da coluna B.", vbInformation
+    MsgBox "OK! Copiado Mensal -> Anual no lugar certo (logo após o fim da tabela iniciada na linha 5).", vbInformation
 
 CleanExit:
     Application.Calculation = oldCalc
