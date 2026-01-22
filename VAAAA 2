@@ -3,8 +3,7 @@ Option Explicit
 Sub CopiarUltimaLinha_Mensal_Para_Anual()
 
     Dim wsSrc As Worksheet, wsDst As Worksheet
-    Dim lastRowSrcB As Long, lastRowDstB As Long
-    Dim lastRowSrcS As Long, lastRowSrcAC As Long
+    Dim srcRow As Long
     Dim dstRow As Long
 
     Dim oldCalc As XlCalculation
@@ -13,7 +12,7 @@ Sub CopiarUltimaLinha_Mensal_Para_Anual()
 
     On Error GoTo EH
 
-    ' ===== Performance =====
+    ' Performance
     oldCalc = Application.Calculation
     oldEvents = Application.EnableEvents
     oldScreen = Application.ScreenUpdating
@@ -22,36 +21,36 @@ Sub CopiarUltimaLinha_Mensal_Para_Anual()
     Application.EnableEvents = False
     Application.Calculation = xlCalculationManual
 
-    ' ===== Abas =====
+    ' Abas
     Set wsSrc = ThisWorkbook.Worksheets("Deb, CRICRA FII Fiagro (Mensal)")
     Set wsDst = ThisWorkbook.Worksheets("Deb, CRICRA FII Fiagro (Anual)")
 
-    ' ========= 1) ACHA ÚLTIMA LINHA NA ORIGEM (REFERÊNCIA: COLUNA B) =========
-    lastRowSrcB = wsSrc.Cells(wsSrc.Rows.Count, "B").End(xlUp).Row
-    If lastRowSrcB < 2 Then Err.Raise 5, , "Não achei dados na origem (coluna B)."
+    ' ===== ORIGEM: última data válida (coluna B) =====
+    srcRow = LinhaDaMaiorData(wsSrc, "B")
+    If srcRow = 0 Then Err.Raise 5, , "Não encontrei data válida na origem."
 
-    ' ========= 2) ACHA PRÓXIMA LINHA NA DESTINO (REFERÊNCIA: COLUNA B) =========
-    lastRowDstB = wsDst.Cells(wsDst.Rows.Count, "B").End(xlUp).Row
-    If lastRowDstB < 1 Then lastRowDstB = 1
-    dstRow = lastRowDstB + 1
+    ' ===== DESTINO: depois da maior data (coluna B) =====
+    dstRow = LinhaDepoisDaMaiorData(wsDst, "B")
 
-    ' ========= 3) COPIA B:P (ORIGEM) -> B:P (DESTINO) =========
-    wsDst.Range("B" & dstRow & ":P" & dstRow).Value = wsSrc.Range("B" & lastRowSrcB & ":P" & lastRowSrcB).Value
+    ' ===== B:P =====
+    wsDst.Range("B" & dstRow & ":P" & dstRow).Value = _
+        wsSrc.Range("B" & srcRow & ":P" & srcRow).Value
 
-    ' ========= 4) COPIA S:U (ORIGEM) -> R:T (DESTINO) =========
-    ' (Mesma linha de origem baseada em B)
-    wsDst.Range("R" & dstRow & ":T" & dstRow).Value = wsSrc.Range("S" & lastRowSrcB & ":U" & lastRowSrcB).Value
+    ' ===== S:U -> R:T =====
+    wsDst.Range("R" & dstRow & ":T" & dstRow).Value = _
+        wsSrc.Range("S" & srcRow & ":U" & srcRow).Value
 
-    ' ========= 5) PUXA FÓRMULAS EM U:Z NA LINHA DESTINO =========
+    ' ===== Fórmulas U:Z =====
     If dstRow > 1 Then
-        wsDst.Range("U" & dstRow & ":Z" & dstRow).FormulaR1C1 = wsDst.Range("U" & (dstRow - 1) & ":Z" & (dstRow - 1)).FormulaR1C1
+        wsDst.Range("U" & dstRow & ":Z" & dstRow).FormulaR1C1 = _
+            wsDst.Range("U" & (dstRow - 1) & ":Z" & (dstRow - 1)).FormulaR1C1
     End If
 
-    ' ========= 6) COPIA AC:AD (ORIGEM) -> AB:AC (DESTINO) =========
-    ' (Mesma linha de origem baseada em B)
-    wsDst.Range("AB" & dstRow & ":AC" & dstRow).Value = wsSrc.Range("AC" & lastRowSrcB & ":AD" & lastRowSrcB).Value
+    ' ===== AC:AD -> AB:AC =====
+    wsDst.Range("AB" & dstRow & ":AC" & dstRow).Value = _
+        wsSrc.Range("AC" & srcRow & ":AD" & srcRow).Value
 
-    MsgBox "OK! Copiado Mensal -> Anual (B:P, S:U->R:T, AC:AD->AB:AC) + fórmulas U:Z.", vbInformation
+    MsgBox "OK! Colado após a maior data no Anual.", vbInformation
 
 CleanExit:
     Application.Calculation = oldCalc
@@ -64,5 +63,4 @@ EH:
     Application.EnableEvents = oldEvents
     Application.ScreenUpdating = oldScreen
     MsgBox "Erro: " & Err.Number & " - " & Err.Description, vbCritical
-
 End Sub
