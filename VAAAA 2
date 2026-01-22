@@ -1,30 +1,24 @@
 Option Explicit
 
 '========================
-' CONFIG (AJUSTE SE PRECISAR)
+' CONFIG
 '========================
-Private Const START_ROW_TABELA As Long = 5   ' a tabela começa na linha 5
+Private Const START_ROW_TABELA As Long = 5   ' (mantive do macro anterior; se não usar, pode ignorar)
 
 '========================
-' AUXILIARES
+' AUXILIARES (tabela/datas)
 '========================
-
 Private Function LinhaFimTabelaPorVazio(ws As Worksheet, ByVal colLetra As String, ByVal startRow As Long) As Long
-    ' Retorna a última linha com conteúdo contínuo a partir de startRow.
     Dim r As Long
     r = startRow
-
     Do While Trim$(CStr(ws.Cells(r, colLetra).Value)) <> ""
         r = r + 1
         If r > ws.Rows.Count Then Exit Do
     Loop
-
     LinhaFimTabelaPorVazio = r - 1
 End Function
 
 Private Function LinhaDaMaiorDataNoBloco(ws As Worksheet, ByVal colLetra As String, ByVal startRow As Long) As Long
-    ' Procura a MAIOR data dentro do bloco:
-    ' startRow -> primeira linha vazia na coluna colLetra
     Dim endRow As Long, r As Long
     Dim bestRow As Long
     Dim bestDate As Date
@@ -41,8 +35,6 @@ Private Function LinhaDaMaiorDataNoBloco(ws As Worksheet, ByVal colLetra As Stri
 
     For r = startRow To endRow
         v = ws.Cells(r, colLetra).Value
-
-        ' tenta interpretar como data
         If IsDate(v) Then
             If CDate(v) > bestDate Then
                 bestDate = CDate(v)
@@ -55,7 +47,6 @@ Private Function LinhaDaMaiorDataNoBloco(ws As Worksheet, ByVal colLetra As Stri
 End Function
 
 Private Function LinhaParaColarDepoisDaTabela(ws As Worksheet, ByVal colLetra As String, ByVal startRow As Long) As Long
-    ' Cola na linha imediatamente após o último registro da tabela (fim do bloco)
     LinhaParaColarDepoisDaTabela = LinhaFimTabelaPorVazio(ws, colLetra, startRow) + 1
 End Function
 
@@ -82,7 +73,103 @@ Private Sub PuxarFormulasLinha(ByVal ws As Worksheet, ByVal srcRow As Long, ByVa
 End Sub
 
 '========================
-' MACRO PRINCIPAL
+' AUXILIARES (SUM shift)
+'========================
+Private Function FindMatchingParen(ByVal s As String, ByVal posAfterSum As Long) As Long
+    Dim pOpen As Long, i As Long, depth As Long
+    pOpen = InStr(posAfterSum, s, "(")
+    If pOpen = 0 Then
+        FindMatchingParen = 0
+        Exit Function
+    End If
+
+    depth = 0
+    For i = pOpen To Len(s)
+        If Mid$(s, i, 1) = "(" Then depth = depth + 1
+        If Mid$(s, i, 1) = ")" Then
+            depth = depth - 1
+            If depth = 0 Then
+                FindMatchingParen = i
+                Exit Function
+            End If
+        End If
+    Next i
+
+    FindMatchingParen = 0
+End Function
+
+Private Function IncrementarRefsDentroDoTexto(ByVal txt As String, ByVal delta As Long) As String
+    Dim re As Object, matches As Object, m As Object
+    Dim result As String
+    Dim lastIdx As Long
+    Dim colPart As String, rowNum As Long
+    Dim startAt As Long
+
+    Set re = CreateObject("VBScript.RegExp")
+    re.Global = True
+    re.IgnoreCase = True
+    re.Pattern = "(\$?[A-Z]{1,3}\$?)(\d+)"
+
+    Set matches = re.Execute(txt)
+    If matches.Count = 0 Then
+        IncrementarRefsDentroDoTexto = txt
+        Exit Function
+    End If
+
+    result = ""
+    lastIdx = 1
+
+    For Each m In matches
+        startAt = m.FirstIndex + 1
+        result = result & Mid$(txt, lastIdx, startAt - lastIdx)
+
+        colPart = m.SubMatches(0)
+        rowNum = CLng(m.SubMatches(1)) + delta
+
+        result = result & colPart & CStr(rowNum)
+        lastIdx = startAt + Len(m.Value)
+    Next m
+
+    result = result & Mid$(txt, lastIdx)
+    IncrementarRefsDentroDoTexto = result
+End Function
+
+Private Function IncrementarLinhasEmSums(ByVal formula As String, ByVal delta As Long) As String
+    Dim i As Long
+    Dim out As String
+    Dim startPos As Long, endPos As Long
+    Dim beforePart As String, insidePart As String, afterPart As String
+    Dim lowerF As String
+
+    lowerF = LCase$(formula)
+    out = formula
+    i = 1
+
+    Do
+        startPos = InStr(i, lowerF, "sum(")
+        If startPos = 0 Then startPos = InStr(i, lowerF, "soma(")
+        If startPos = 0 Then Exit Do
+
+        endPos = FindMatchingParen(out, startPos + 3)
+        If endPos = 0 Then Exit Do
+
+        beforePart = Left$(out, startPos - 1)
+        insidePart = Mid$(out, startPos, endPos - startPos + 1)
+        afterPart = Mid$(out, endPos + 1)
+
+        insidePart = IncrementarRefsDentroDoTexto(insidePart, delta)
+
+        out = beforePart & insidePart & afterPart
+        lowerF = LCase$(out)
+
+        i = endPos + 1
+    Loop
+
+    IncrementarLinhasEmSums = out
+End Function
+
+'========================
+' MACRO 1: Mensal -> Anual (como você pediu antes)
 '========================
 Sub CopiarUltimaLinha_Mensal_Para_Anual()
 
@@ -96,7 +183,6 @@ Sub CopiarUltimaLinha_Mensal_Para_Anual()
 
     On Error GoTo EH
 
-    ' Performance
     oldCalc = Application.Calculation
     oldEvents = Application.EnableEvents
     oldScreen = Application.ScreenUpdating
@@ -105,35 +191,31 @@ Sub CopiarUltimaLinha_Mensal_Para_Anual()
     Application.EnableEvents = False
     Application.Calculation = xlCalculationManual
 
-    ' Abas
     Set wsSrc = ThisWorkbook.Worksheets("Deb, CRICRA FII Fiagro (Mensal)")
     Set wsDst = ThisWorkbook.Worksheets("Deb, CRICRA FII Fiagro (Anual)")
 
-    ' ===== ORIGEM: pega a linha da maior data dentro do bloco da tabela (linha 5 até vazio) =====
+    ' ORIGEM: maior data no bloco (linha 5 até vazio) na coluna B
     srcRow = LinhaDaMaiorDataNoBloco(wsSrc, "B", START_ROW_TABELA)
     If srcRow = 0 Then Err.Raise 5, , "Não encontrei nenhuma data válida na origem dentro do bloco (coluna B, a partir da linha 5)."
 
-    ' ===== DESTINO: cola DEPOIS do fim da tabela (linha 5 até vazio) =====
+    ' DESTINO: cola após o fim da tabela (linha 5 até vazio) na coluna B
     dstRow = LinhaParaColarDepoisDaTabela(wsDst, "B", START_ROW_TABELA)
 
-    ' ===== B:P (origem -> destino) =====
-    wsDst.Range("B" & dstRow & ":P" & dstRow).Value = _
-        wsSrc.Range("B" & srcRow & ":P" & srcRow).Value
+    ' B:P
+    wsDst.Range("B" & dstRow & ":P" & dstRow).Value = wsSrc.Range("B" & srcRow & ":P" & srcRow).Value
 
-    ' ===== S:U (origem) -> R:T (destino) =====
-    wsDst.Range("R" & dstRow & ":T" & dstRow).Value = _
-        wsSrc.Range("S" & srcRow & ":U" & srcRow).Value
+    ' S:U -> R:T
+    wsDst.Range("R" & dstRow & ":T" & dstRow).Value = wsSrc.Range("S" & srcRow & ":U" & srcRow).Value
 
-    ' ===== Puxar fórmulas U:Z (da linha anterior para a linha destino) =====
+    ' fórmulas U:Z
     If dstRow > START_ROW_TABELA Then
         PuxarFormulasLinha wsDst, dstRow - 1, dstRow, "U:Z"
     End If
 
-    ' ===== AC:AD (origem) -> AB:AC (destino) =====
-    wsDst.Range("AB" & dstRow & ":AC" & dstRow).Value = _
-        wsSrc.Range("AC" & srcRow & ":AD" & srcRow).Value
+    ' AC:AD -> AB:AC
+    wsDst.Range("AB" & dstRow & ":AC" & dstRow).Value = wsSrc.Range("AC" & srcRow & ":AD" & srcRow).Value
 
-    MsgBox "OK! Copiado Mensal -> Anual no lugar certo (logo após o fim da tabela iniciada na linha 5).", vbInformation
+    MsgBox "OK! Copiado Mensal -> Anual.", vbInformation
 
 CleanExit:
     Application.Calculation = oldCalc
@@ -146,5 +228,44 @@ EH:
     Application.EnableEvents = oldEvents
     Application.ScreenUpdating = oldScreen
     MsgBox "Erro: " & Err.Number & " - " & Err.Description, vbCritical
+End Sub
 
+'========================
+' MACRO 2: Descer intervalo das SOMAS na linha 72 (C:AC) da aba Anual
+'========================
+Sub DescerIntervaloSUM_Linha72_C_AC_Anual()
+
+    Dim ws As Worksheet
+    Dim r As Long, c As Long
+    Dim cell As Range
+    Dim f As String
+
+    On Error GoTo EH
+
+    Set ws = ThisWorkbook.Worksheets("Deb, CRICRA FII Fiagro (Anual)")
+    r = 72
+
+    Application.ScreenUpdating = False
+    Application.EnableEvents = False
+
+    For c = ws.Range("C1").Column To ws.Range("AC1").Column
+        Set cell = ws.Cells(r, c)
+
+        If cell.HasFormula Then
+            f = cell.Formula
+            If InStr(1, f, "SUM(", vbTextCompare) > 0 Or InStr(1, f, "SOMA(", vbTextCompare) > 0 Then
+                cell.Formula = IncrementarLinhasEmSums(f, 1) ' desce 1 linha
+            End If
+        End If
+    Next c
+
+CleanExit:
+    Application.EnableEvents = True
+    Application.ScreenUpdating = True
+    Exit Sub
+
+EH:
+    Application.EnableEvents = True
+    Application.ScreenUpdating = True
+    MsgBox "Erro: " & Err.Number & " - " & Err.Description, vbCritical
 End Sub
