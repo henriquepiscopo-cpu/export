@@ -70,7 +70,7 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
     arrVol = wsOrigem.Range("B" & lastRowOrigem & ":P" & lastRowOrigem).Value
     wsDestino.Range("B" & targetRow & ":P" & targetRow).Value = arrVol
 
-    ' Coluna B → data (mês/ano) "nov-25"
+    ' Coluna B → data (mês/ano) "mar-12" / "nov-25" (robusto)
     SetMesAnoCell wsDestino.Cells(targetRow, "B")
 
     ' Colunas C até P → dividir por 1.000.000.000
@@ -95,7 +95,7 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
     arrEnc = wsEnc.Range("B" & lastRowEnc & ":D" & lastRowEnc).Value
     wsDestino.Range("S" & targetRow & ":U" & targetRow).Value = arrEnc
 
-    ' Coluna S → data "nov-25" (robusto, sem pular ano)
+    ' Coluna S → data "mar-12" (robusto)
     SetMesAnoCell wsDestino.Cells(targetRow, "S")
 
     ' Colunas T:U → dividir por 1.000.000.000
@@ -125,7 +125,7 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
     arrOferNInc = wsOferDetNInc.Range("B" & lastRowOferDetNInc & ":G" & lastRowOferDetNInc).Value
     wsDestino.Range("AE" & targetRow & ":AJ" & targetRow).Value = arrOferNInc
 
-    ' AE → data "nov-25" (robusto)
+    ' AE → data "mar-12"
     SetMesAnoCell wsDestino.Cells(targetRow, "AE")
 
     ' AF:AJ → /1e9
@@ -140,7 +140,7 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
     arrOfer = wsOferDet.Range("B" & lastRowOferDet & ":G" & lastRowOferDet).Value
     wsDestino.Range("AR" & targetRow & ":AW" & targetRow).Value = arrOfer
 
-    ' AR → data "nov-25" (robusto)
+    ' AR → data "mar-12"
     SetMesAnoCell wsDestino.Cells(targetRow, "AR")
 
     ' AS:AW → /1e9 e 1 casa decimal
@@ -158,7 +158,7 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
     arrDestRec = wsDestRec.Range("B" & lastRowDestRec & ":L" & lastRowDestRec).Value
     wsDestino.Range("BG" & targetRow & ":BP" & targetRow).Value = arrDestRec
 
-    ' BG → data "nov-25" (robusto)
+    ' BG → data "mar-12"
     SetMesAnoCell wsDestino.Cells(targetRow, "BG")
 
     ' BH:BP → /1e9 e 1 casa decimal
@@ -171,7 +171,7 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
         End With
     Next c
 
-    MsgBox "OK! Atualizado até Dest  Recursos (BG:BP) + datas robustas (nov-25).", vbInformation
+    MsgBox "OK! Atualizado até Dest  Recursos (BG:BP) + datas fixas (mar-12/nov-25).", vbInformation
 
 CleanExit:
     Application.Calculation = oldCalc
@@ -213,7 +213,6 @@ End Sub
 
 Private Function MesPtParaNumero(ByVal m As String) As Long
     m = LCase$(Trim$(m))
-
     If Left$(m, 3) = "jan" Then MesPtParaNumero = 1: Exit Function
     If Left$(m, 3) = "fev" Then MesPtParaNumero = 2: Exit Function
     If Left$(m, 3) = "mar" Then MesPtParaNumero = 3: Exit Function
@@ -226,16 +225,10 @@ Private Function MesPtParaNumero(ByVal m As String) As Long
     If Left$(m, 3) = "out" Then MesPtParaNumero = 10: Exit Function
     If Left$(m, 3) = "nov" Then MesPtParaNumero = 11: Exit Function
     If Left$(m, 3) = "dez" Then MesPtParaNumero = 12: Exit Function
-
     MesPtParaNumero = 0
 End Function
 
 Private Function ParseMesAno(ByVal v As Variant) As Variant
-    ' Aceita:
-    ' - data Excel (serial)
-    ' - texto "nov-25", "nov/25", "nov-2025", "nov/2025"
-    ' Retorna DateSerial(ano, mes, 1) ou Empty
-
     Dim s As String, parts() As String
     Dim mTxt As String, mNum As Long, y As Long, yy As Long
 
@@ -283,6 +276,7 @@ Private Sub SetMesAnoCell(ByVal cell As Range)
     d = ParseMesAno(cell.Value)
     If Not IsEmpty(d) Then
         cell.Value = d
-        cell.NumberFormat = "mmm-yy" ' -> nov-25
+        ' FORÇA exatamente: mar-12 / nov-25 (PT-BR + ano 2 dígitos)
+        cell.NumberFormat = "[$-pt-BR]mmm-yy"
     End If
 End Sub
