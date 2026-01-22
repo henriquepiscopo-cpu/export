@@ -69,7 +69,7 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
     arrVol = wsOrigem.Range("B" & lastRowOrigem & ":P" & lastRowOrigem).Value
     wsDestino.Range("B" & targetRow & ":P" & targetRow).Value = arrVol
 
-    ' B → mês/ano (mar-12, nov-25) SEM pular ano
+    ' B → mês/ano "mar-12" / "nov-25" (FORÇADO PELO TEXTO, se existir MMM/YY)
     SetMesAnoCell wsDestino.Cells(targetRow, "B")
 
     ' C:P → /1e9
@@ -92,7 +92,7 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
     arrEnc = wsEnc.Range("B" & lastRowEnc & ":D" & lastRowEnc).Value
     wsDestino.Range("S" & targetRow & ":U" & targetRow).Value = arrEnc
 
-    ' S → mês/ano (mar-12, nov-25) SEM pular ano
+    ' S → mês/ano (FORÇADO)
     SetMesAnoCell wsDestino.Cells(targetRow, "S")
 
     ' T:U → /1e9
@@ -122,7 +122,7 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
     arrOferNInc = wsOferDetNInc.Range("B" & lastRowOferDetNInc & ":G" & lastRowOferDetNInc).Value
     wsDestino.Range("AE" & targetRow & ":AJ" & targetRow).Value = arrOferNInc
 
-    ' AE → mês/ano
+    ' AE → mês/ano (FORÇADO)
     SetMesAnoCell wsDestino.Cells(targetRow, "AE")
 
     ' AF:AJ → /1e9
@@ -137,7 +137,7 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
     arrOfer = wsOferDet.Range("B" & lastRowOferDet & ":G" & lastRowOferDet).Value
     wsDestino.Range("AR" & targetRow & ":AW" & targetRow).Value = arrOfer
 
-    ' AR → mês/ano
+    ' AR → mês/ano (FORÇADO)
     SetMesAnoCell wsDestino.Cells(targetRow, "AR")
 
     ' AS:AW → /1e9 e 1 casa decimal
@@ -155,7 +155,7 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
     arrDestRec = wsDestRec.Range("B" & lastRowDestRec & ":L" & lastRowDestRec).Value
     wsDestino.Range("BG" & targetRow & ":BP" & targetRow).Value = arrDestRec
 
-    ' BG → mês/ano
+    ' BG → mês/ano (FORÇADO)
     SetMesAnoCell wsDestino.Cells(targetRow, "BG")
 
     ' BH:BP → /1e9 e 1 casa decimal
@@ -168,7 +168,7 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
         End With
     Next c
 
-    MsgBox "OK! Datas corrigidas via TEXTO (Nov/25 não vira 2026).", vbInformation
+    MsgBox "OK! Datas corrigidas (Nov/25 vira 01/11/2025 e mostra nov-25).", vbInformation
 
 CleanExit:
     Application.Calculation = oldCalc
@@ -208,77 +208,89 @@ Private Sub PuxarFormulasLinha(ByVal ws As Worksheet, ByVal srcRow As Long, ByVa
 End Sub
 
 
-Private Function MesPtParaNumero(ByVal m As String) As Long
+' ====== DATAS ROBUSTAS ======
+
+Private Function MesParaNumeroPTEN(ByVal m As String) As Long
     m = LCase$(Trim$(m))
-    If Left$(m, 3) = "jan" Then MesPtParaNumero = 1: Exit Function
-    If Left$(m, 3) = "fev" Then MesPtParaNumero = 2: Exit Function
-    If Left$(m, 3) = "mar" Then MesPtParaNumero = 3: Exit Function
-    If Left$(m, 3) = "abr" Then MesPtParaNumero = 4: Exit Function
-    If Left$(m, 3) = "mai" Then MesPtParaNumero = 5: Exit Function
-    If Left$(m, 3) = "jun" Then MesPtParaNumero = 6: Exit Function
-    If Left$(m, 3) = "jul" Then MesPtParaNumero = 7: Exit Function
-    If Left$(m, 3) = "ago" Then MesPtParaNumero = 8: Exit Function
-    If Left$(m, 3) = "set" Then MesPtParaNumero = 9: Exit Function
-    If Left$(m, 3) = "out" Then MesPtParaNumero = 10: Exit Function
-    If Left$(m, 3) = "nov" Then MesPtParaNumero = 11: Exit Function
-    If Left$(m, 3) = "dez" Then MesPtParaNumero = 12: Exit Function
-    MesPtParaNumero = 0
+    m = Left$(m, 3)
+
+    Select Case m
+        Case "jan": MesParaNumeroPTEN = 1
+        Case "feb", "fev": MesParaNumeroPTEN = 2
+        Case "mar": MesParaNumeroPTEN = 3
+        Case "apr", "abr": MesParaNumeroPTEN = 4
+        Case "may", "mai": MesParaNumeroPTEN = 5
+        Case "jun": MesParaNumeroPTEN = 6
+        Case "jul": MesParaNumeroPTEN = 7
+        Case "aug", "ago": MesParaNumeroPTEN = 8
+        Case "sep", "set": MesParaNumeroPTEN = 9
+        Case "oct", "out": MesParaNumeroPTEN = 10
+        Case "nov": MesParaNumeroPTEN = 11
+        Case "dec", "dez": MesParaNumeroPTEN = 12
+        Case Else: MesParaNumeroPTEN = 0
+    End Select
 End Function
 
+Private Function LooksLikeMMMYY(ByVal s As String) As Boolean
+    ' Ex: "Nov/25", "nov-25", "Nov/2025"
+    Dim t As String
+    t = LCase$(Trim$(s))
+    t = Replace(t, " ", "")
+    LooksLikeMMMYY = (t Like "[a-z][a-z][a-z][/|-]##") Or (t Like "[a-z][a-z][a-z][/|-]####")
+End Function
 
-Private Function ParseMesAnoFromString(ByVal s As String) As Variant
-    ' Aceita textos tipo:
-    '  - "Nov/25", "nov-25", "nov/2025", "nov-2025"
-    ' Retorna DateSerial(ano, mes, 1) ou Empty
-    Dim parts() As String
-    Dim mTxt As String, mNum As Long
-    Dim y As Long, yy As Long
+Private Function ParseMMMYY(ByVal s As String) As Variant
+    ' Converte "Nov/25" -> 01/11/2025
+    Dim t As String, parts() As String
+    Dim mon As Long, y As Long
 
-    s = LCase$(Trim$(s))
-    s = Replace(s, ".", "")
-    s = Replace(s, " ", "")
-    s = Replace(s, "/", "-")
+    t = Trim$(s)
+    t = Replace(t, " ", "")
+    t = Replace(t, "/", "-")
 
-    parts = Split(s, "-")
+    parts = Split(t, "-")
     If UBound(parts) < 1 Then
-        ParseMesAnoFromString = Empty
+        ParseMMMYY = Empty
         Exit Function
     End If
 
-    mTxt = parts(0)
-    mNum = MesPtParaNumero(mTxt)
-    If mNum = 0 Then
-        ParseMesAnoFromString = Empty
+    mon = MesParaNumeroPTEN(parts(0))
+    If mon = 0 Then
+        ParseMMMYY = Empty
         Exit Function
     End If
 
     If Len(parts(1)) = 2 Then
-        yy = CLng(parts(1))
-        y = 2000 + yy
+        y = 2000 + CLng(parts(1))     ' <<<<<< força 25 -> 2025
     Else
         y = CLng(parts(1))
         If y < 100 Then y = 2000 + y
     End If
 
-    ParseMesAnoFromString = DateSerial(y, mNum, 1)
+    ParseMMMYY = DateSerial(y, mon, 1)
 End Function
 
-
 Private Sub SetMesAnoCell(ByVal cell As Range)
-    Dim d As Variant
     Dim txt As String
+    Dim d As Variant
 
-    ' 1) PRIORIDADE TOTAL: o que está aparecendo na célula (ex: "Nov/25")
     txt = cell.Text
-    d = ParseMesAnoFromString(txt)
 
-    ' 2) fallback: tenta pelo value, se o texto não ajudou
-    If IsEmpty(d) Then
-        d = ParseMesAnoFromString(CStr(cell.Value))
+    ' REGRA MÁXIMA: se parece MMM/YY, IGNORA .Value e força pelo texto
+    If LooksLikeMMMYY(txt) Then
+        d = ParseMMMYY(txt)
+    Else
+        ' fallback
+        d = ParseMMMYY(CStr(cell.Value))
+        If IsEmpty(d) Then
+            If IsDate(cell.Value) Then
+                d = DateSerial(Year(CDate(cell.Value)), Month(CDate(cell.Value)), 1)
+            End If
+        End If
     End If
 
     If Not IsEmpty(d) Then
         cell.Value = d
-        cell.NumberFormat = "[$-pt-BR]mmm-yy" ' -> mar-12 / nov-25
+        cell.NumberFormat = "[$-pt-BR]mmm-yy"   ' -> mar-12 / nov-25
     End If
 End Sub
