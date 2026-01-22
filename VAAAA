@@ -2,43 +2,24 @@ Option Explicit
 
 Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
 
-    Dim wsOrigem As Worksheet
-    Dim wsPrazo As Worksheet
-    Dim wsEnc As Worksheet
-    Dim wsPrazo12431 As Worksheet
-    Dim wsOferDetNInc As Worksheet
-    Dim wsOferDet As Worksheet
-    Dim wsDestRec As Worksheet
-    Dim wsDestino As Worksheet
+    Dim wsOrigem As Worksheet, wsPrazo As Worksheet, wsEnc As Worksheet
+    Dim wsPrazo12431 As Worksheet, wsOferDetNInc As Worksheet, wsOferDet As Worksheet
+    Dim wsDestRec As Worksheet, wsDestino As Worksheet
 
-    Dim lastRowOrigem As Long
-    Dim lastRowPrazo As Long
-    Dim lastRowEnc As Long
-    Dim lastRowPrazo12431 As Long
-    Dim lastRowOferDetNInc As Long
-    Dim lastRowOferDet As Long
-    Dim lastRowDestRec As Long
+    Dim lastRowOrigem As Long, lastRowPrazo As Long, lastRowEnc As Long
+    Dim lastRowPrazo12431 As Long, lastRowOferDetNInc As Long, lastRowOferDet As Long, lastRowDestRec As Long
 
-    Dim nextRowB As Long
-    Dim nextRowQ As Long
-    Dim nextRowS As Long
-    Dim targetRow As Long
-
+    Dim nextRowB As Long, nextRowQ As Long, nextRowS As Long, targetRow As Long
     Dim c As Long
-    Dim prazoValor As Variant
-    Dim prazo12431Valor As Variant
 
-    Dim arrVol As Variant
-    Dim arrEnc As Variant
-    Dim arrOferNInc As Variant
-    Dim arrOfer As Variant
-    Dim arrDestRec As Variant
+    Dim prazoValor As Variant, prazo12431Valor As Variant
+    Dim arrVol As Variant, arrEnc As Variant, arrOferNInc As Variant, arrOfer As Variant, arrDestRec As Variant
 
-    Dim oldCalc As XlCalculation
-    Dim oldEvents As Boolean
-    Dim oldScreen As Boolean
+    Dim oldCalc As XlCalculation, oldEvents As Boolean, oldScreen As Boolean
+    Dim passo As Long
 
     On Error GoTo EH
+    passo = 0
 
     ' ===== Performance =====
     oldCalc = Application.Calculation
@@ -48,6 +29,8 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
     Application.ScreenUpdating = False
     Application.EnableEvents = False
     Application.Calculation = xlCalculationManual
+
+    passo = 1
 
     ' ===== Abas =====
     Set wsOrigem = ThisWorkbook.Worksheets("Volume")
@@ -59,67 +42,78 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
     Set wsOferDet = ThisWorkbook.Worksheets("12 431 Ofer  Detentor")
     Set wsDestRec = ThisWorkbook.Worksheets("Dest  Recursos")
 
-    ' Garante cálculo antes de ler .Text
+    passo = 2
+
+    ' garante cálculo (para .Text)
     wsOrigem.Calculate
     wsEnc.Calculate
     wsOferDetNInc.Calculate
     wsOferDet.Calculate
     wsDestRec.Calculate
 
-    ' ========= 1) ACHA LINHA DE DESTINO (baseada em B, Q e S) =========
+    passo = 3
+
+    ' ========= 1) Linha destino (baseada em B, Q e S) =========
     nextRowB = wsDestino.Cells(wsDestino.Rows.Count, "B").End(xlUp).Row + 1
     nextRowQ = wsDestino.Cells(wsDestino.Rows.Count, "Q").End(xlUp).Row + 1
     nextRowS = wsDestino.Cells(wsDestino.Rows.Count, "S").End(xlUp).Row + 1
     targetRow = Application.WorksheetFunction.Max(nextRowB, nextRowQ, nextRowS)
 
-    ' ========= 2) VOLUME: COPIA ÚLTIMA LINHA B:P =========
+    passo = 4
+
+    ' ========= 2) VOLUME: copia última linha B:P =========
     lastRowOrigem = wsOrigem.Cells(wsOrigem.Rows.Count, "B").End(xlUp).Row
     arrVol = wsOrigem.Range("B" & lastRowOrigem & ":P" & lastRowOrigem).Value
     wsDestino.Range("B" & targetRow & ":P" & targetRow).Value = arrVol
 
-    ' B → data mês/ano (robusto, sem overflow)
+    passo = 5
+
+    ' B → mês/ano (robusto)
     SetMesAnoCellFromSourceText wsOrigem.Cells(lastRowOrigem, "B"), wsDestino.Cells(targetRow, "B")
 
-    ' C:P → /1e9 (robusto: converte texto numérico também)
+    passo = 6
+
+    ' C:P → /1e9 (robusto: converte texto)
     For c = wsDestino.Range("C1").Column To wsDestino.Range("P1").Column
-        With wsDestino.Cells(targetRow, c)
-            Dim dv As Variant
-            dv = ToDoubleSafe(.Value)
-            If Not IsEmpty(dv) Then .Value = CDbl(dv) / 1000000000#
-        End With
+        DividirCelulaPor1e9 wsDestino.Cells(targetRow, c), False
     Next c
+
+    passo = 7
 
     ' ========= 3) PRAZO (não Inc): última linha (pela B) col C -> Q =========
     lastRowPrazo = wsPrazo.Cells(wsPrazo.Rows.Count, "B").End(xlUp).Row
     prazoValor = wsPrazo.Cells(lastRowPrazo, "C").Value
     wsDestino.Cells(targetRow, "Q").Value = prazoValor
-    With wsDestino.Cells(targetRow, "Q")
-        If IsNumeric(.Value) And Not IsEmpty(.Value) Then .NumberFormat = "0.0"
-    End With
+    If IsNumeric(wsDestino.Cells(targetRow, "Q").Value) Then wsDestino.Cells(targetRow, "Q").NumberFormat = "0.0"
+
+    passo = 8
 
     ' ========= 4) ENCERRADOS: última linha (pela B) B:D -> S:U =========
     lastRowEnc = wsEnc.Cells(wsEnc.Rows.Count, "B").End(xlUp).Row
     arrEnc = wsEnc.Range("B" & lastRowEnc & ":D" & lastRowEnc).Value
     wsDestino.Range("S" & targetRow & ":U" & targetRow).Value = arrEnc
 
-    ' S → data mês/ano (robusto, sem overflow)
+    passo = 9
+
+    ' S → mês/ano (robusto)
     SetMesAnoCellFromSourceText wsEnc.Cells(lastRowEnc, "B"), wsDestino.Cells(targetRow, "S")
 
-    ' T:U → /1e9 (robusto)
-    For c = wsDestino.Range("T1").Column To wsDestino.Range("U1").Column
-        With wsDestino.Cells(targetRow, c)
-            Dim dv2 As Variant
-            dv2 = ToDoubleSafe(.Value)
-            If Not IsEmpty(dv2) Then .Value = CDbl(dv2) / 1000000000#
-        End With
-    Next c
+    passo = 10
+
+    ' T:U → /1e9
+    DividirCelulaPor1e9 wsDestino.Cells(targetRow, "T"), False
+    DividirCelulaPor1e9 wsDestino.Cells(targetRow, "U"), False
+
+    passo = 11
 
     ' ========= 5) 12 431 Prazo Médio: última linha com dado na C -> AC =========
     lastRowPrazo12431 = wsPrazo12431.Cells(wsPrazo12431.Rows.Count, "C").End(xlUp).Row
     prazo12431Valor = wsPrazo12431.Cells(lastRowPrazo12431, "C").Value
     wsDestino.Cells(targetRow, "AC").Value = prazo12431Valor
 
-    ' ========= 6) PUXAR FÓRMULAS (linha anterior -> targetRow) =========
+    passo = 12
+
+    ' ========= 6) PUXAR FÓRMULAS =========
     If targetRow > 1 Then
         PuxarFormulasLinha wsDestino, targetRow - 1, targetRow, "V:AA"
         PuxarFormulasLinha wsDestino, targetRow - 1, targetRow, "AD"
@@ -129,64 +123,60 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
         PuxarFormulasLinha wsDestino, targetRow - 1, targetRow, "BR:BT"
     End If
 
+    passo = 13
+
     ' ========= 7) Ofer Detentor N Inc: última linha (pela B) B:G -> AE:AJ =========
     lastRowOferDetNInc = wsOferDetNInc.Cells(wsOferDetNInc.Rows.Count, "B").End(xlUp).Row
     arrOferNInc = wsOferDetNInc.Range("B" & lastRowOferDetNInc & ":G" & lastRowOferDetNInc).Value
     wsDestino.Range("AE" & targetRow & ":AJ" & targetRow).Value = arrOferNInc
 
-    ' AE → data mês/ano
+    passo = 14
+
     SetMesAnoCellFromSourceText wsOferDetNInc.Cells(lastRowOferDetNInc, "B"), wsDestino.Cells(targetRow, "AE")
 
-    ' AF:AJ → /1e9 (robusto)
+    passo = 15
+
     For c = wsDestino.Range("AF1").Column To wsDestino.Range("AJ1").Column
-        With wsDestino.Cells(targetRow, c)
-            Dim dv3 As Variant
-            dv3 = ToDoubleSafe(.Value)
-            If Not IsEmpty(dv3) Then .Value = CDbl(dv3) / 1000000000#
-        End With
+        DividirCelulaPor1e9 wsDestino.Cells(targetRow, c), False
     Next c
+
+    passo = 16
 
     ' ========= 8) 12 431 Ofer  Detentor: última linha (pela B) B:G -> AR:AW =========
     lastRowOferDet = wsOferDet.Cells(wsOferDet.Rows.Count, "B").End(xlUp).Row
     arrOfer = wsOferDet.Range("B" & lastRowOferDet & ":G" & lastRowOferDet).Value
     wsDestino.Range("AR" & targetRow & ":AW" & targetRow).Value = arrOfer
 
-    ' AR → data mês/ano
+    passo = 17
+
     SetMesAnoCellFromSourceText wsOferDet.Cells(lastRowOferDet, "B"), wsDestino.Cells(targetRow, "AR")
 
-    ' AS:AW → /1e9 e 1 casa decimal
+    passo = 18
+
     For c = wsDestino.Range("AS1").Column To wsDestino.Range("AW1").Column
-        With wsDestino.Cells(targetRow, c)
-            Dim dv4 As Variant
-            dv4 = ToDoubleSafe(.Value)
-            If Not IsEmpty(dv4) Then
-                .Value = CDbl(dv4) / 1000000000#
-                .NumberFormat = "0.0"
-            End If
-        End With
+        DividirCelulaPor1e9 wsDestino.Cells(targetRow, c), True   ' 1 casa decimal
     Next c
+
+    passo = 19
 
     ' ========= 9) Dest  Recursos: última linha (pela B) B:L -> BG:BP =========
     lastRowDestRec = wsDestRec.Cells(wsDestRec.Rows.Count, "B").End(xlUp).Row
     arrDestRec = wsDestRec.Range("B" & lastRowDestRec & ":L" & lastRowDestRec).Value
     wsDestino.Range("BG" & targetRow & ":BP" & targetRow).Value = arrDestRec
 
-    ' BG → data mês/ano
+    passo = 20
+
     SetMesAnoCellFromSourceText wsDestRec.Cells(lastRowDestRec, "B"), wsDestino.Cells(targetRow, "BG")
 
-    ' BH:BP → /1e9 e 1 casa decimal
+    passo = 21
+
     For c = wsDestino.Range("BH1").Column To wsDestino.Range("BP1").Column
-        With wsDestino.Cells(targetRow, c)
-            Dim dv5 As Variant
-            dv5 = ToDoubleSafe(.Value)
-            If Not IsEmpty(dv5) Then
-                .Value = CDbl(dv5) / 1000000000#
-                .NumberFormat = "0.0"
-            End If
-        End With
+        DividirCelulaPor1e9 wsDestino.Cells(targetRow, c), True
     Next c
 
-    MsgBox "OK! (Sem estouro) e divisão por 1e9 aplicada mesmo com números em texto.", vbInformation
+    passo = 22
+
+    MsgBox "OK! Concluído.", vbInformation
 
 CleanExit:
     Application.Calculation = oldCalc
@@ -198,12 +188,15 @@ EH:
     Application.Calculation = oldCalc
     Application.EnableEvents = oldEvents
     Application.ScreenUpdating = oldScreen
-    MsgBox "Erro: " & Err.Number & " - " & Err.Description, vbCritical
-
+    MsgBox "Erro: " & Err.Number & " - " & Err.Description & vbCrLf & _
+           "Passo: " & passo & vbCrLf & _
+           "Dica: me manda esse 'Passo' que eu te digo a linha exata.", vbCritical
 End Sub
 
 
-' ===== Copia fórmulas da linha srcRow para dstRow em colunas específicas =====
+' =======================
+' COPIA FÓRMULAS
+' =======================
 Private Sub PuxarFormulasLinha(ByVal ws As Worksheet, ByVal srcRow As Long, ByVal dstRow As Long, ByVal cols As String)
     Dim p() As String
     Dim colStart As String, colEnd As String
@@ -228,29 +221,22 @@ End Sub
 
 
 ' =======================
-' DATAS (robustas, sem overflow)
+' DATAS (robustas)
 ' =======================
-
 Private Sub SetMesAnoCellFromSourceText(ByVal srcCell As Range, ByVal dstCell As Range)
-    ' 1) tenta pelo TEXTO (Nov/25 etc)
-    ' 2) se falhar, tenta pelo Value2 (serial Excel) se estiver em faixa válida
     On Error GoTo SafeExit
 
-    Dim txt As String
-    Dim d As Variant
-    Dim v As Variant
-    Dim serial As Double
+    Dim txt As String, d As Variant
+    Dim v As Variant, serial As Double
 
     txt = Trim$(srcCell.Text)
     d = ParseMMMYY_Safe(txt)
 
-    If IsEmpty(d) Then
-        d = ParseMMMYY_Safe(CStr(srcCell.Value))
-    End If
+    If IsEmpty(d) Then d = ParseMMMYY_Safe(CStr(srcCell.Value))
 
     If Not IsEmpty(d) Then
         dstCell.Value = d
-        dstCell.NumberFormat = "[$-pt-BR]mmm-yy"  ' ex: nov-25 / mar-12
+        dstCell.NumberFormat = "[$-pt-BR]mmm-yy"
         Exit Sub
     End If
 
@@ -267,20 +253,17 @@ SafeExit:
 End Sub
 
 Private Function ParseMMMYY_Safe(ByVal s As String) As Variant
-    ' Parse robusto para mês/ano SEM usar CLng direto.
-    ' Regra do ano: pega os ÚLTIMOS 2 ou 4 dígitos dos dígitos encontrados.
     On Error GoTo Fail
 
     Dim t As String, parts() As String
     Dim mon As Long
-    Dim yDigits As String
-    Dim yy As String, yyyy As String
+    Dim yDigits As String, yyyy As String, yy As String
     Dim y As Long
 
     t = LCase$(Trim$(s))
     If t = "" Then GoTo Fail
 
-    t = Replace(t, ChrW(160), "") ' NBSP
+    t = Replace(t, ChrW(160), "")
     t = Replace(t, " ", "")
     t = Replace(t, "/", "-")
     t = Replace(t, ".", "-")
@@ -294,7 +277,6 @@ Private Function ParseMMMYY_Safe(ByVal s As String) As Variant
     yDigits = ExtrairDigitos(parts(1))
     If Len(yDigits) = 0 Then GoTo Fail
 
-    ' Usa SEMPRE os últimos dígitos (evita overflow se vier lixo junto)
     If Len(yDigits) >= 4 Then
         yyyy = Right$(yDigits, 4)
         y = CLng(yyyy)
@@ -343,14 +325,28 @@ Private Function MesParaNumeroPTEN(ByVal m As String) As Long
     End Select
 End Function
 
+
 ' =======================
-' NÚMEROS (robusto: pega string "1.234.567,89" ou "1,234,567.89" etc)
+' DIVISÃO 1e9 (sem overflow)
 ' =======================
+Private Sub DividirCelulaPor1e9(ByVal cell As Range, ByVal oneDecimal As Boolean)
+    On Error GoTo SafeExit
+
+    Dim dv As Variant
+    dv = ToDoubleSafe(cell.Value)
+
+    If Not IsEmpty(dv) Then
+        cell.Value = CDbl(dv) / 1000000000#
+        If oneDecimal Then cell.NumberFormat = "0.0"
+    End If
+
+SafeExit:
+End Sub
+
 Private Function ToDoubleSafe(ByVal v As Variant) As Variant
     On Error GoTo Fail
 
     If IsError(v) Or IsEmpty(v) Then GoTo Fail
-
     If IsNumeric(v) Then
         ToDoubleSafe = CDbl(v)
         Exit Function
@@ -360,9 +356,8 @@ Private Function ToDoubleSafe(ByVal v As Variant) As Variant
     s = Trim$(CStr(v))
     If s = "" Then GoTo Fail
 
-    s = Replace(s, ChrW(160), "") ' NBSP
+    s = Replace(s, ChrW(160), "")
 
-    ' mantém só dígitos, sinal e separadores
     Dim i As Long, ch As String, clean As String
     clean = ""
     For i = 1 To Len(s)
@@ -371,31 +366,24 @@ Private Function ToDoubleSafe(ByVal v As Variant) As Variant
     Next i
     If clean = "" Or clean = "-" Then GoTo Fail
 
-    ' Estratégia:
-    ' - se tiver vírgula e ponto: assume o ÚLTIMO separador como decimal e remove o outro
-    ' - se tiver só um tipo: decide se é milhar (3 dígitos depois) ou decimal
     Dim pPos As Long, cPos As Long
     pPos = InStrRev(clean, ".")
     cPos = InStrRev(clean, ",")
 
     If pPos > 0 And cPos > 0 Then
         If pPos > cPos Then
-            ' decimal = ponto
             clean = Replace(clean, ",", "")
         Else
-            ' decimal = vírgula
             clean = Replace(clean, ".", "")
             clean = Replace(clean, ",", ".")
         End If
     ElseIf cPos > 0 Then
-        ' só vírgula: se tiver 3 dígitos depois, é milhar → remove; senão decimal → vira ponto
         If Len(clean) - cPos = 3 Then
             clean = Replace(clean, ",", "")
         Else
             clean = Replace(clean, ",", ".")
         End If
     ElseIf pPos > 0 Then
-        ' só ponto: se tiver 3 dígitos depois, é milhar → remove; senão decimal
         If Len(clean) - pPos = 3 Then
             clean = Replace(clean, ".", "")
         End If
