@@ -1,5 +1,47 @@
 Option Explicit
 
+'========================
+' AUXILIARES
+'========================
+Private Function LinhaDaMaiorData(ws As Worksheet, ByVal colLetra As String) As Long
+    Dim maxDate As Date
+    Dim r As Range
+
+    On Error GoTo Fail
+    maxDate = Application.WorksheetFunction.Max(ws.Range(colLetra & ":" & colLetra))
+
+    Set r = ws.Range(colLetra & ":" & colLetra).Find( _
+                What:=maxDate, _
+                LookIn:=xlValues, _
+                LookAt:=xlWhole _
+            )
+
+    If r Is Nothing Then
+        LinhaDaMaiorData = 0
+    Else
+        LinhaDaMaiorData = r.Row
+    End If
+    Exit Function
+
+Fail:
+    LinhaDaMaiorData = 0
+End Function
+
+Private Function LinhaDepoisDaMaiorData(ws As Worksheet, ByVal colLetra As String) As Long
+    Dim linhaMax As Long
+    linhaMax = LinhaDaMaiorData(ws, colLetra)
+
+    If linhaMax = 0 Then
+        ' fallback: depois do último usado
+        LinhaDepoisDaMaiorData = ws.Cells(ws.Rows.Count, colLetra).End(xlUp).Row + 1
+    Else
+        LinhaDepoisDaMaiorData = linhaMax + 1
+    End If
+End Function
+
+'========================
+' MACRO PRINCIPAL
+'========================
 Sub CopiarUltimaLinha_Mensal_Para_Anual()
 
     Dim wsSrc As Worksheet, wsDst As Worksheet
@@ -25,32 +67,32 @@ Sub CopiarUltimaLinha_Mensal_Para_Anual()
     Set wsSrc = ThisWorkbook.Worksheets("Deb, CRICRA FII Fiagro (Mensal)")
     Set wsDst = ThisWorkbook.Worksheets("Deb, CRICRA FII Fiagro (Anual)")
 
-    ' ===== ORIGEM: última data válida (coluna B) =====
+    ' ORIGEM: pega a linha da maior data na coluna B
     srcRow = LinhaDaMaiorData(wsSrc, "B")
-    If srcRow = 0 Then Err.Raise 5, , "Não encontrei data válida na origem."
+    If srcRow = 0 Then Err.Raise 5, , "Não encontrei data válida na origem (coluna B)."
 
-    ' ===== DESTINO: depois da maior data (coluna B) =====
+    ' DESTINO: cola depois da maior data na coluna B
     dstRow = LinhaDepoisDaMaiorData(wsDst, "B")
 
-    ' ===== B:P =====
+    ' B:P (origem -> destino)
     wsDst.Range("B" & dstRow & ":P" & dstRow).Value = _
         wsSrc.Range("B" & srcRow & ":P" & srcRow).Value
 
-    ' ===== S:U -> R:T =====
+    ' S:U (origem) -> R:T (destino)
     wsDst.Range("R" & dstRow & ":T" & dstRow).Value = _
         wsSrc.Range("S" & srcRow & ":U" & srcRow).Value
 
-    ' ===== Fórmulas U:Z =====
+    ' Puxar fórmulas U:Z (da linha anterior para a linha destino)
     If dstRow > 1 Then
         wsDst.Range("U" & dstRow & ":Z" & dstRow).FormulaR1C1 = _
             wsDst.Range("U" & (dstRow - 1) & ":Z" & (dstRow - 1)).FormulaR1C1
     End If
 
-    ' ===== AC:AD -> AB:AC =====
+    ' AC:AD (origem) -> AB:AC (destino)
     wsDst.Range("AB" & dstRow & ":AC" & dstRow).Value = _
         wsSrc.Range("AC" & srcRow & ":AD" & srcRow).Value
 
-    MsgBox "OK! Colado após a maior data no Anual.", vbInformation
+    MsgBox "OK! Colado no Anual logo após a maior data da coluna B.", vbInformation
 
 CleanExit:
     Application.Calculation = oldCalc
@@ -63,4 +105,5 @@ EH:
     Application.EnableEvents = oldEvents
     Application.ScreenUpdating = oldScreen
     MsgBox "Erro: " & Err.Number & " - " & Err.Description, vbCritical
+
 End Sub
