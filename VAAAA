@@ -8,6 +8,7 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
     Dim wsPrazo12431 As Worksheet
     Dim wsOferDetNInc As Worksheet
     Dim wsOferDet As Worksheet
+    Dim wsDestRec As Worksheet
     Dim wsDestino As Worksheet
 
     Dim lastRowOrigem As Long
@@ -16,6 +17,7 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
     Dim lastRowPrazo12431 As Long
     Dim lastRowOferDetNInc As Long
     Dim lastRowOferDet As Long
+    Dim lastRowDestRec As Long
 
     Dim nextRowB As Long
     Dim nextRowQ As Long
@@ -30,6 +32,7 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
     Dim arrEnc As Variant
     Dim arrOferNInc As Variant
     Dim arrOfer As Variant
+    Dim arrDestRec As Variant
 
     Dim oldCalc As XlCalculation
     Dim oldEvents As Boolean
@@ -53,7 +56,8 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
     Set wsEnc = ThisWorkbook.Worksheets("12 431 V  Encerrados")          ' ajuste se tiver 1 espaço só
     Set wsPrazo12431 = ThisWorkbook.Worksheets("12 431 Prazo Médio")
     Set wsOferDetNInc = ThisWorkbook.Worksheets("Ofer  Detentor N Inc")  ' como você escreveu
-    Set wsOferDet = ThisWorkbook.Worksheets("Ofer  Detentor")            ' NOVA aba
+    Set wsOferDet = ThisWorkbook.Worksheets("12 431 Ofer  Detentor")     ' como você corrigiu
+    Set wsDestRec = ThisWorkbook.Worksheets("Dest  Recursos")            ' NOVA
 
     ' ========= 1) ACHA LINHA DE DESTINO (baseada em B, Q e S) =========
     nextRowB = wsDestino.Cells(wsDestino.Rows.Count, "B").End(xlUp).Row + 1
@@ -146,7 +150,7 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
         End With
     Next c
 
-    ' ========= 8) Ofer Detentor: última linha pela COL B -> B:G em AR:AW =========
+    ' ========= 8) 12 431 Ofer  Detentor: última linha pela COL B -> B:G em AR:AW =========
     lastRowOferDet = wsOferDet.Cells(wsOferDet.Rows.Count, "B").End(xlUp).Row
     arrOfer = wsOferDet.Range("B" & lastRowOferDet & ":G" & lastRowOferDet).Value
     wsDestino.Range("AR" & targetRow & ":AW" & targetRow).Value = arrOfer
@@ -169,7 +173,30 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
         End With
     Next c
 
-    MsgBox "OK! Atualizado até Ofer Detentor (AR:AW).", vbInformation
+    ' ========= 9) Dest  Recursos: última linha pela COL B -> B:L em BG:BP =========
+    lastRowDestRec = wsDestRec.Cells(wsDestRec.Rows.Count, "B").End(xlUp).Row
+    arrDestRec = wsDestRec.Range("B" & lastRowDestRec & ":L" & lastRowDestRec).Value
+    wsDestino.Range("BG" & targetRow & ":BP" & targetRow).Value = arrDestRec
+
+    ' BG → data
+    With wsDestino.Cells(targetRow, "BG")
+        If IsDate(.Value) Then
+            .Value = DateSerial(Year(CDate(.Value)), Month(CDate(.Value)), 1)
+            .NumberFormat = "mmm-yy"
+        End If
+    End With
+
+    ' BH:BP → /1e9 e 1 casa decimal
+    For c = wsDestino.Range("BH1").Column To wsDestino.Range("BP1").Column
+        With wsDestino.Cells(targetRow, c)
+            If IsNumeric(.Value) And Not IsEmpty(.Value) Then
+                .Value = .Value / 1000000000#
+                .NumberFormat = "0.0"
+            End If
+        End With
+    Next c
+
+    MsgBox "OK! Atualizado até Dest  Recursos (BG:BP).", vbInformation
 
 CleanExit:
     Application.Calculation = oldCalc
@@ -206,4 +233,3 @@ Private Sub PuxarFormulasLinha(ByVal ws As Worksheet, ByVal srcRow As Long, ByVa
 
     ws.Range(addrDst).FormulaR1C1 = ws.Range(addrSrc).FormulaR1C1
 End Sub
-
