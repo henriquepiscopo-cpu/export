@@ -53,11 +53,11 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
     Set wsOrigem = ThisWorkbook.Worksheets("Volume")
     Set wsDestino = ThisWorkbook.Worksheets("Deb, CRICRA FII Fiagro (Mensal)")
     Set wsPrazo = ThisWorkbook.Worksheets("Prazo Médio não Inc")
-    Set wsEnc = ThisWorkbook.Worksheets("12 431 V  Encerrados")          ' ajuste se tiver 1 espaço só
+    Set wsEnc = ThisWorkbook.Worksheets("12 431 V  Encerrados")
     Set wsPrazo12431 = ThisWorkbook.Worksheets("12 431 Prazo Médio")
-    Set wsOferDetNInc = ThisWorkbook.Worksheets("Ofer  Detentor N Inc")  ' como você escreveu
-    Set wsOferDet = ThisWorkbook.Worksheets("12 431 Ofer  Detentor")     ' como você corrigiu
-    Set wsDestRec = ThisWorkbook.Worksheets("Dest  Recursos")            ' NOVA
+    Set wsOferDetNInc = ThisWorkbook.Worksheets("Ofer  Detentor N Inc")
+    Set wsOferDet = ThisWorkbook.Worksheets("12 431 Ofer  Detentor")
+    Set wsDestRec = ThisWorkbook.Worksheets("Dest  Recursos")
 
     ' ========= 1) ACHA LINHA DE DESTINO (baseada em B, Q e S) =========
     nextRowB = wsDestino.Cells(wsDestino.Rows.Count, "B").End(xlUp).Row + 1
@@ -71,12 +71,7 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
     wsDestino.Range("B" & targetRow & ":P" & targetRow).Value = arrVol
 
     ' Coluna B → data (mês/ano) "nov-25"
-    With wsDestino.Cells(targetRow, "B")
-        If IsDate(.Value) Then
-            .Value = DateSerial(Year(CDate(.Value)), Month(CDate(.Value)), 1)
-            .NumberFormat = "mmm-yy"
-        End If
-    End With
+    SetMesAnoCell wsDestino.Cells(targetRow, "B")
 
     ' Colunas C até P → dividir por 1.000.000.000
     For c = wsDestino.Range("C1").Column To wsDestino.Range("P1").Column
@@ -100,13 +95,8 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
     arrEnc = wsEnc.Range("B" & lastRowEnc & ":D" & lastRowEnc).Value
     wsDestino.Range("S" & targetRow & ":U" & targetRow).Value = arrEnc
 
-    ' Coluna S → data (mês/ano) "nov-25"
-    With wsDestino.Cells(targetRow, "S")
-        If IsDate(.Value) Then
-            .Value = DateSerial(Year(CDate(.Value)), Month(CDate(.Value)), 1)
-            .NumberFormat = "mmm-yy"
-        End If
-    End With
+    ' Coluna S → data "nov-25" (robusto, sem pular ano)
+    SetMesAnoCell wsDestino.Cells(targetRow, "S")
 
     ' Colunas T:U → dividir por 1.000.000.000
     For c = wsDestino.Range("T1").Column To wsDestino.Range("U1").Column
@@ -135,13 +125,8 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
     arrOferNInc = wsOferDetNInc.Range("B" & lastRowOferDetNInc & ":G" & lastRowOferDetNInc).Value
     wsDestino.Range("AE" & targetRow & ":AJ" & targetRow).Value = arrOferNInc
 
-    ' AE → data
-    With wsDestino.Cells(targetRow, "AE")
-        If IsDate(.Value) Then
-            .Value = DateSerial(Year(CDate(.Value)), Month(CDate(.Value)), 1)
-            .NumberFormat = "mmm-yy"
-        End If
-    End With
+    ' AE → data "nov-25" (robusto)
+    SetMesAnoCell wsDestino.Cells(targetRow, "AE")
 
     ' AF:AJ → /1e9
     For c = wsDestino.Range("AF1").Column To wsDestino.Range("AJ1").Column
@@ -155,13 +140,8 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
     arrOfer = wsOferDet.Range("B" & lastRowOferDet & ":G" & lastRowOferDet).Value
     wsDestino.Range("AR" & targetRow & ":AW" & targetRow).Value = arrOfer
 
-    ' AR → data
-    With wsDestino.Cells(targetRow, "AR")
-        If IsDate(.Value) Then
-            .Value = DateSerial(Year(CDate(.Value)), Month(CDate(.Value)), 1)
-            .NumberFormat = "mmm-yy"
-        End If
-    End With
+    ' AR → data "nov-25" (robusto)
+    SetMesAnoCell wsDestino.Cells(targetRow, "AR")
 
     ' AS:AW → /1e9 e 1 casa decimal
     For c = wsDestino.Range("AS1").Column To wsDestino.Range("AW1").Column
@@ -178,13 +158,8 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
     arrDestRec = wsDestRec.Range("B" & lastRowDestRec & ":L" & lastRowDestRec).Value
     wsDestino.Range("BG" & targetRow & ":BP" & targetRow).Value = arrDestRec
 
-    ' BG → data
-    With wsDestino.Cells(targetRow, "BG")
-        If IsDate(.Value) Then
-            .Value = DateSerial(Year(CDate(.Value)), Month(CDate(.Value)), 1)
-            .NumberFormat = "mmm-yy"
-        End If
-    End With
+    ' BG → data "nov-25" (robusto)
+    SetMesAnoCell wsDestino.Cells(targetRow, "BG")
 
     ' BH:BP → /1e9 e 1 casa decimal
     For c = wsDestino.Range("BH1").Column To wsDestino.Range("BP1").Column
@@ -196,7 +171,7 @@ Sub CopiarUltimaLinhaVolume_Para_Deb_CRICRA()
         End With
     Next c
 
-    MsgBox "OK! Atualizado até Dest  Recursos (BG:BP).", vbInformation
+    MsgBox "OK! Atualizado até Dest  Recursos (BG:BP) + datas robustas (nov-25).", vbInformation
 
 CleanExit:
     Application.Calculation = oldCalc
@@ -211,6 +186,7 @@ EH:
     MsgBox "Erro: " & Err.Number & " - " & Err.Description, vbCritical
 
 End Sub
+
 
 Private Sub PuxarFormulasLinha(ByVal ws As Worksheet, ByVal srcRow As Long, ByVal dstRow As Long, ByVal cols As String)
     Dim p() As String
@@ -232,4 +208,81 @@ Private Sub PuxarFormulasLinha(ByVal ws As Worksheet, ByVal srcRow As Long, ByVa
     addrDst = colStart & dstRow & ":" & colEnd & dstRow
 
     ws.Range(addrDst).FormulaR1C1 = ws.Range(addrSrc).FormulaR1C1
+End Sub
+
+
+Private Function MesPtParaNumero(ByVal m As String) As Long
+    m = LCase$(Trim$(m))
+
+    If Left$(m, 3) = "jan" Then MesPtParaNumero = 1: Exit Function
+    If Left$(m, 3) = "fev" Then MesPtParaNumero = 2: Exit Function
+    If Left$(m, 3) = "mar" Then MesPtParaNumero = 3: Exit Function
+    If Left$(m, 3) = "abr" Then MesPtParaNumero = 4: Exit Function
+    If Left$(m, 3) = "mai" Then MesPtParaNumero = 5: Exit Function
+    If Left$(m, 3) = "jun" Then MesPtParaNumero = 6: Exit Function
+    If Left$(m, 3) = "jul" Then MesPtParaNumero = 7: Exit Function
+    If Left$(m, 3) = "ago" Then MesPtParaNumero = 8: Exit Function
+    If Left$(m, 3) = "set" Then MesPtParaNumero = 9: Exit Function
+    If Left$(m, 3) = "out" Then MesPtParaNumero = 10: Exit Function
+    If Left$(m, 3) = "nov" Then MesPtParaNumero = 11: Exit Function
+    If Left$(m, 3) = "dez" Then MesPtParaNumero = 12: Exit Function
+
+    MesPtParaNumero = 0
+End Function
+
+Private Function ParseMesAno(ByVal v As Variant) As Variant
+    ' Aceita:
+    ' - data Excel (serial)
+    ' - texto "nov-25", "nov/25", "nov-2025", "nov/2025"
+    ' Retorna DateSerial(ano, mes, 1) ou Empty
+
+    Dim s As String, parts() As String
+    Dim mTxt As String, mNum As Long, y As Long, yy As Long
+
+    If IsEmpty(v) Or v = "" Then
+        ParseMesAno = Empty
+        Exit Function
+    End If
+
+    If IsDate(v) Then
+        ParseMesAno = DateSerial(Year(CDate(v)), Month(CDate(v)), 1)
+        Exit Function
+    End If
+
+    s = LCase$(Trim$(CStr(v)))
+    s = Replace(s, ".", "")
+    s = Replace(s, " ", "")
+    s = Replace(s, "/", "-")
+
+    parts = Split(s, "-")
+    If UBound(parts) < 1 Then
+        ParseMesAno = Empty
+        Exit Function
+    End If
+
+    mTxt = parts(0)
+    mNum = MesPtParaNumero(mTxt)
+    If mNum = 0 Then
+        ParseMesAno = Empty
+        Exit Function
+    End If
+
+    If Len(parts(1)) = 2 Then
+        yy = CLng(parts(1))
+        y = 2000 + yy
+    Else
+        y = CLng(parts(1))
+        If y < 100 Then y = 2000 + y
+    End If
+
+    ParseMesAno = DateSerial(y, mNum, 1)
+End Function
+
+Private Sub SetMesAnoCell(ByVal cell As Range)
+    Dim d As Variant
+    d = ParseMesAno(cell.Value)
+    If Not IsEmpty(d) Then
+        cell.Value = d
+        cell.NumberFormat = "mmm-yy" ' -> nov-25
+    End If
 End Sub
