@@ -1,0 +1,98 @@
+Option Explicit
+
+Sub AtualizarTabela_VarIPCA_Top10Bottom10()
+
+    Const SHEET_NAME As String = "Var. IPCA"
+    Const COL_REF As String = "I"
+    Const FIRST_DATA_ROW As Long = 11
+    Const TOP_N As Long = 10
+    Const BOTTOM_N As Long = 10
+
+    Dim ws As Worksheet
+    Dim lastRow As Long, lastCol As Long
+    Dim rngSort As Range
+    Dim i As Long
+
+    Dim numericRows() As Long
+    Dim nCount As Long
+
+    Set ws = ThisWorkbook.Worksheets(SHEET_NAME)
+
+    Application.ScreenUpdating = False
+    Application.EnableEvents = False
+    Application.Calculation = xlCalculationManual
+    On Error GoTo CleanFail
+
+    ' 1) Reset ocultações
+    ws.Rows.Hidden = False
+
+    ' 2) Oculta linhas fixas
+    ws.Rows(9).Hidden = True
+    ws.Rows(10).Hidden = True
+
+    ' 3) Última linha com algo na coluna I
+    lastRow = ws.Cells(ws.Rows.Count, COL_REF).End(xlUp).Row
+    If lastRow < FIRST_DATA_ROW Then GoTo CleanExit
+
+    ' 4) Descobre última coluna usada na linha 11 (fallback: pelo UsedRange)
+    lastCol = ws.Cells(FIRST_DATA_ROW, ws.Columns.Count).End(xlToLeft).Column
+    If lastCol < 1 Then lastCol = ws.UsedRange.Columns(ws.UsedRange.Columns.Count).Column
+    If lastCol < 9 Then lastCol = 9 ' garante pelo menos até a coluna I
+
+    ' 5) Range para ordenar: da linha 11 até a última linha, col A até lastCol
+    Set rngSort = ws.Range(ws.Cells(FIRST_DATA_ROW, 1), ws.Cells(lastRow, lastCol))
+
+    ' 6) Ordena pela coluna I (sem cabeçalho)
+    With ws.Sort
+        .SortFields.Clear
+        .SortFields.Add Key:=ws.Range(ws.Cells(FIRST_DATA_ROW, COL_REF), ws.Cells(lastRow, COL_REF)), _
+                        SortOn:=xlSortOnValues, Order:=xlAscending, DataOption:=xlSortNormal
+        .SetRange rngSort
+        .Header = xlNo
+        .MatchCase = False
+        .Orientation = xlTopToBottom
+        .Apply
+    End With
+
+    ' 7) Captura linhas com valores NUMÉRICOS na coluna I
+    ReDim numericRows(1 To (lastRow - FIRST_DATA_ROW + 1))
+    nCount = 0
+
+    For i = FIRST_DATA_ROW To lastRow
+        If IsNumeric(ws.Cells(i, COL_REF).Value) And Len(Trim(ws.Cells(i, COL_REF).Value)) > 0 Then
+            nCount = nCount + 1
+            numericRows(nCount) = i
+        End If
+    Next i
+
+    If nCount = 0 Then GoTo CleanExit
+
+    ' 8) Oculta todo o bloco de dados e reexibe Top 10 e Bottom 10 numéricos
+    ws.Rows(FIRST_DATA_ROW & ":" & lastRow).Hidden = True
+
+    Dim topLimit As Long, bottomStartIdx As Long
+    topLimit = Application.WorksheetFunction.Min(TOP_N, nCount)
+    bottomStartIdx = Application.WorksheetFunction.Max(1, nCount - BOTTOM_N + 1)
+
+    ' Top 10 (menores)
+    For i = 1 To topLimit
+        ws.Rows(numericRows(i)).Hidden = False
+    Next i
+
+    ' Bottom 10 (maiores)
+    For i = bottomStartIdx To nCount
+        ws.Rows(numericRows(i)).Hidden = False
+    Next i
+
+CleanExit:
+    Application.ScreenUpdating = True
+    Application.EnableEvents = True
+    Application.Calculation = xlCalculationAutomatic
+    Exit Sub
+
+CleanFail:
+    Application.ScreenUpdating = True
+    Application.EnableEvents = True
+    Application.Calculation = xlCalculationAutomatic
+    MsgBox "Erro na macro: " & Err.Number & " - " & Err.Description, vbExclamation
+End Sub
