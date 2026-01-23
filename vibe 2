@@ -1,0 +1,70 @@
+Option Explicit
+
+' =========================
+'  BUFFER PARA "DESFAZER"
+' =========================
+Private gUndo_QAE As Variant
+Private gUndo_AXBL As Variant
+Private gUndoReady As Boolean
+
+Sub Copiar_9a700()
+    Dim ws As Worksheet
+    Set ws = ActiveSheet  ' ou troque para: ThisWorkbook.Worksheets("NOME_DA_ABA")
+
+    Application.ScreenUpdating = False
+    Application.EnableEvents = False
+
+    On Error GoTo Fail
+
+    ' 1) Salva o estado atual dos DESTINOS (para desfazer depois)
+    gUndo_QAE = ws.Range("Q9:AE700").Value2
+    gUndo_AXBL = ws.Range("AX9:BL700").Value2
+    gUndoReady = True
+
+    ' 2) Copia A:O -> Q:AE (mesmas linhas)
+    ws.Range("Q9:AE700").Value2 = ws.Range("A9:O700").Value2
+
+    ' 3) Copia AI:AU -> AX:BL (mesmas linhas)
+    ws.Range("AX9:BL700").Value2 = ws.Range("AI9:AU700").Value2
+
+CleanExit:
+    Application.EnableEvents = True
+    Application.ScreenUpdating = True
+    Exit Sub
+
+Fail:
+    Application.EnableEvents = True
+    Application.ScreenUpdating = True
+    MsgBox "Erro: " & Err.Number & " - " & Err.Description, vbExclamation
+End Sub
+
+Sub Desfazer_Copiar_9a700()
+    Dim ws As Worksheet
+    Set ws = ActiveSheet  ' ou troque para: ThisWorkbook.Worksheets("NOME_DA_ABA")
+
+    If Not gUndoReady Then
+        MsgBox "Nada para desfazer (ainda não foi executado o Copiar_9a700 nesta sessão).", vbInformation
+        Exit Sub
+    End If
+
+    Application.ScreenUpdating = False
+    Application.EnableEvents = False
+
+    On Error GoTo Fail
+
+    ' Restaura os destinos exatamente como estavam antes do último "Copiar_9a700"
+    ws.Range("Q9:AE700").Value2 = gUndo_QAE
+    ws.Range("AX9:BL700").Value2 = gUndo_AXBL
+
+    gUndoReady = False
+
+CleanExit:
+    Application.EnableEvents = True
+    Application.ScreenUpdating = True
+    Exit Sub
+
+Fail:
+    Application.EnableEvents = True
+    Application.ScreenUpdating = True
+    MsgBox "Erro ao desfazer: " & Err.Number & " - " & Err.Description, vbExclamation
+End Sub
