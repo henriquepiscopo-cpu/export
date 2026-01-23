@@ -1,0 +1,76 @@
+Option Explicit
+
+Sub Ordenar_InputMercSecundario_PorG_Decrescente()
+    Dim ws As Worksheet
+    Dim lastRow As Long
+    Dim rngSort As Range
+
+    Set ws = ThisWorkbook.Worksheets("input merc secundario")
+
+    Application.ScreenUpdating = False
+    Application.EnableEvents = False
+    On Error GoTo Fail
+
+    ' Última linha com dados (usando a coluna G como referência)
+    lastRow = ws.Cells(ws.Rows.Count, "G").End(xlUp).Row
+    If lastRow < 7 Then GoTo CleanExit
+
+    ' Intervalo da "tabela": D:I a partir da linha 7 até lastRow
+    Set rngSort = ws.Range("D7:I" & lastRow)
+
+    ' Ordena pela coluna G (que é a 4ª coluna dentro de D:I)
+    With ws.Sort
+        .SortFields.Clear
+        .SortFields.Add Key:=ws.Range("G7:G" & lastRow), _
+                        SortOn:=xlSortOnValues, Order:=xlDescending, DataOption:=xlSortNormal
+        .SetRange rngSort
+        .Header = xlNo
+        .MatchCase = False
+        .Orientation = xlTopToBottom
+        .Apply
+    End With
+
+CleanExit:
+    Application.EnableEvents = True
+    Application.ScreenUpdating = True
+    Exit Sub
+
+Fail:
+    Application.EnableEvents = True
+    Application.ScreenUpdating = True
+    MsgBox "Erro ao ordenar: " & Err.Number & " - " & Err.Description, vbExclamation
+End Sub
+
+
+Sub Dividir_ColunaQ_Por1Milhao_L7a1600()
+    Dim ws As Worksheet
+    Dim rng As Range
+
+    Set ws = ThisWorkbook.Worksheets("input merc secundario")
+    Set rng = ws.Range("Q7:Q1600")
+
+    Application.ScreenUpdating = False
+    Application.EnableEvents = False
+    On Error GoTo Fail
+
+    ' Divide apenas células numéricas (ignora vazios/texto/erros)
+    Dim c As Range, v As Variant
+    For Each c In rng.Cells
+        v = c.Value
+        If Not IsError(v) Then
+            If IsNumeric(v) And Len(CStr(v)) > 0 Then
+                c.Value = CDbl(v) / 1000000#
+            End If
+        End If
+    Next c
+
+CleanExit:
+    Application.EnableEvents = True
+    Application.ScreenUpdating = True
+    Exit Sub
+
+Fail:
+    Application.EnableEvents = True
+    Application.ScreenUpdating = True
+    MsgBox "Erro ao dividir coluna Q: " & Err.Number & " - " & Err.Description, vbExclamation
+End Sub
