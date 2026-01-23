@@ -12,6 +12,7 @@ Sub AtualizarTabela_VarIPCA_Top10Bottom10()
     Dim lastRow As Long, lastCol As Long
     Dim rngSort As Range
     Dim i As Long
+    Dim v As Variant
 
     Dim numericRows() As Long
     Dim nCount As Long
@@ -30,16 +31,15 @@ Sub AtualizarTabela_VarIPCA_Top10Bottom10()
     ws.Rows(9).Hidden = True
     ws.Rows(10).Hidden = True
 
-    ' 3) Última linha com algo na coluna I
+    ' 3) Última linha relevante pela coluna I
     lastRow = ws.Cells(ws.Rows.Count, COL_REF).End(xlUp).Row
     If lastRow < FIRST_DATA_ROW Then GoTo CleanExit
 
-    ' 4) Descobre última coluna usada na linha 11 (fallback: pelo UsedRange)
+    ' 4) Última coluna usada na linha 11 (fallback para I)
     lastCol = ws.Cells(FIRST_DATA_ROW, ws.Columns.Count).End(xlToLeft).Column
-    If lastCol < 1 Then lastCol = ws.UsedRange.Columns(ws.UsedRange.Columns.Count).Column
-    If lastCol < 9 Then lastCol = 9 ' garante pelo menos até a coluna I
+    If lastCol < 9 Then lastCol = 9
 
-    ' 5) Range para ordenar: da linha 11 até a última linha, col A até lastCol
+    ' 5) Range para ordenar (A até lastCol)
     Set rngSort = ws.Range(ws.Cells(FIRST_DATA_ROW, 1), ws.Cells(lastRow, lastCol))
 
     ' 6) Ordena pela coluna I (sem cabeçalho)
@@ -54,25 +54,34 @@ Sub AtualizarTabela_VarIPCA_Top10Bottom10()
         .Apply
     End With
 
-    ' 7) Captura linhas com valores NUMÉRICOS na coluna I
+    ' 7) Primeiro oculta todo mundo no bloco (depois reexibe o que interessa)
+    ws.Rows(FIRST_DATA_ROW & ":" & lastRow).Hidden = True
+
+    ' 8) Coleta linhas numéricas e já garante que erros (#N/D etc) ficam ocultos
     ReDim numericRows(1 To (lastRow - FIRST_DATA_ROW + 1))
     nCount = 0
 
     For i = FIRST_DATA_ROW To lastRow
-        If IsNumeric(ws.Cells(i, COL_REF).Value) And Len(Trim(ws.Cells(i, COL_REF).Value)) > 0 Then
+        v = ws.Cells(i, COL_REF).Value
+
+        ' Se for erro (#N/D etc), continua oculto
+        If IsError(v) Then
+            ' opcional: se quiser esconder só #N/D e deixar outros, dá pra checar o tipo do erro
+            ' mantém oculto
+        ElseIf IsNumeric(v) And Len(CStr(v)) > 0 Then
             nCount = nCount + 1
             numericRows(nCount) = i
+        Else
+            ' texto/vazio -> continua oculto
         End If
     Next i
 
     If nCount = 0 Then GoTo CleanExit
 
-    ' 8) Oculta todo o bloco de dados e reexibe Top 10 e Bottom 10 numéricos
-    ws.Rows(FIRST_DATA_ROW & ":" & lastRow).Hidden = True
-
+    ' 9) Reexibe Top 10 e Bottom 10 (somente numéricos)
     Dim topLimit As Long, bottomStartIdx As Long
-    topLimit = Application.WorksheetFunction.Min(TOP_N, nCount)
-    bottomStartIdx = Application.WorksheetFunction.Max(1, nCount - BOTTOM_N + 1)
+    topLimit = WorksheetFunction.Min(TOP_N, nCount)
+    bottomStartIdx = WorksheetFunction.Max(1, nCount - BOTTOM_N + 1)
 
     ' Top 10 (menores)
     For i = 1 To topLimit
